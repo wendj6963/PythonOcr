@@ -1,0 +1,27 @@
+{
+  "paths": {
+    "image": "",
+    "image_dir": "",
+    "det_model": "qt_app/models/det/default_det.onnx",
+    "rec_model": "qt_app/models/rec/default_rec.onnx",
+    "vocab": "vocab_rec.txt"
+  },
+  "params": {
+    "det_conf": 0.25,
+    "det_iou": 0.7,
+    "det_max_det": 1,
+    "rec_conf": 0.25,
+    "rec_iou": 0.7,
+    "det_imgsz": 640,
+    "rec_imgsz": 320,
+    "use_gpu": false,
+    "num_threads": 0,
+    "sort_by": "x",
+    "mock_mode": false,
+    "obb_color": "#00C800",
+    "obb_line_width": 2
+  },
+  "ui": {
+    "mode": "单张识别"
+  }
+}

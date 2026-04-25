@@ -1,0 +1,166 @@
+Metadata-Version: 2.4
+Name: pythonocr
+Version: 0.1.0
+Summary: YOLO-based OCR: detection + recognition + Qt trainer
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: ultralytics==8.4.23
+Requires-Dist: opencv-python==4.13.0.92
+Requires-Dist: numpy==1.26.4
+Requires-Dist: Pillow==12.1.1
+Requires-Dist: pydantic==2.12.5
+Requires-Dist: PySide6==6.10.2
+Requires-Dist: tqdm==4.67.3
+Requires-Dist: cryptography==42.0.8
+Requires-Dist: onnx==1.16.1
+Requires-Dist: onnxslim==0.1.71
+Requires-Dist: onnxruntime-gpu==1.18.1
+
+# PythonOcr（YOLO 定位 + 识别 + Qt 训练工具）
+
+> 说明：当前仓库原始状态仅包含 `Images/` 数据与 Qt 设计图。本文档与脚本用于从零跑通“定位训练 → 识别训练 → 推理”。
+
+## 1. 工具链总览（Windows，已适配 Anaconda 环境 `D:\Users\admin\anaconda3\envs\PyThonOcr`）
+
+按顺序双击 `tools/` 下脚本即可，全部中文提示：
+
+1) `tools/00_一键安装环境.bat`
+- 激活 Anaconda 环境 `PyThonOcr`（路径已写死，可按需改）并执行 `pip install -e .`
+
+2) `tools/01_标定助手_一键开始.bat`（推荐）
+- 自动生成 det/rec 目录结构（仅复制图片）
+- 启动“标定助手”对 **Images/trains 全量标注**，输出到 `datasets/det|rec/labels_all`
+- 自动把 `labels_all` 按 train/val 同步到 `labels`
+
+3) `tools/02_自动拆分_同步labels并检查.bat`
+- 仅做同步 + 完整性检查（det=1 类，rec 类别数由词表自动读取）。适合补标一批后快速复查。
+
+4) `tools/03_一键训练_det_rec并推理抽查.bat`
+- 一次跑 det+rec 训练（可传参：epochs imgsz batch device det_name rec_name）
+- 训练日志落盘：`models/runs/<日期_时间>/train_det.log|train_rec.log`
+- 随机抽 train/val 各 5 张做推理，结果截图落盘：`infer_train/`, `infer_val/`
+
+5) `tools/04_一键检查_补标后复查.bat`
+- 补标后快速复查：同步 labels_all -> labels，并检查 det/rec 标注完整性
+
+> 手工命令行等价（确保已激活环境）：
+> ```powershell
+> pip install -e .
+> pyocr prepare-det --src Images\trains --out datasets\det --val-ratio 0.2
+> pyocr prepare-rec --src Images\trains --out datasets\rec --val-ratio 0.2
+> pyocr label-assistant --images Images\trains --det-labels datasets\det\labels_all --rec-labels datasets\rec\labels_all --vocab vocab_rec.txt
+> pyocr sync-split-labels --images-root datasets\det\images --labels-src datasets\det\labels_all --labels-root datasets\det\labels
+> pyocr sync-split-labels --images-root datasets\rec\images --labels-src datasets\rec\labels_all --labels-root datasets\rec\labels
+> pyocr check-obb-labels --images datasets\det\images\train --labels datasets\det\labels\train --num-classes 1
+> pyocr check-obb-labels --images datasets\rec\images\train --labels datasets\rec\labels\train --num-classes 12
+> pyocr train-det --data datasets\det\det.yaml --epochs 50 --imgsz 640 --batch 8 --device 0 --project models --name det
+> pyocr train-rec --data datasets\rec\rec.yaml --epochs 50 --imgsz 640 --batch 16 --device 0 --project models --name rec
+> pyocr infer --det-weights models\det\weights\best.pt --rec-weights models\rec\weights\best.pt --image Images\trains\demo.bmp --vocab vocab_rec.txt
+> ```
+
+## 2. 数据与标注
+
+- 原始图片：`Images/trains/*.bmp`
+- 标注格式：默认 YOLO-OBB（四点顺时针）
+  - det：单类（0），格式 `cls x1 y1 x2 y2 x3 y3 x4 y4`
+  - rec：12 类（0-9+H+K），同上；类别映射见 `datasets/rec/rec.yaml`
+- 词表：`vocab_rec.txt`（行号 = class id）
+- 标定助手支持：
+  - 旋转、缩放、移动矩形框；鼠标角落显示旋转箭头
+  - `E` 输入识别内容（可多字符，自动拆成多个字符框）；`I` 输入序号
+  - **自动扩类**：输入了词表中不存在的新字符（如 `A`、`B`）会自动追加到 `vocab_rec.txt`，并同步更新 `datasets/rec/rec.yaml` 的 `names`
+  - 同一张图片完成 det+rec，自动分别写入 `datasets/det|rec/labels`（经同步）
+
+## 3. 准备数据集目录（不含标注）
+
+```powershell
+pyocr prepare-det --src Images\trains --out datasets\det --val-ratio 0.2
+pyocr prepare-rec --src Images\trains --out datasets\rec --val-ratio 0.2
+```
+
+输出结构示例：
+- `datasets/det/images/train|val/*.bmp`
+- `datasets/det/labels/train|val/*.txt`（若你导入了标注）
+
+识别(rec)结构示例：
+- `datasets/rec/images/train|val/*.bmp`
+- `datasets/rec/labels/train|val/*.txt`
+
+## 4. 导入标注（你需要提供标注来源）
+
+目前支持占位命令：
+
+```powershell
+pyocr import-yolo --images datasets\det\images\train --labels <你的label目录> --out-labels datasets\det\labels\train
+```
+
+> 说明：如果你手头已有 LabelImg 导出的 YOLO txt（每张图同名 txt），可直接拷贝/导入。
+
+## 3. 标注：一张图同时完成定位+识别
+
+推荐用 `tools/01_标定助手_一键开始.bat`，核心操作：
+- 左键拖拽画框；内部拖动移动；边缘缩放；四角旋转（光标变旋转箭头）
+- 选中框后：`E` 输入识别内容（支持多字符，自动拆为多个字符框），`I` 输入序号
+- `n/p` 翻页自动保存；`s` 保存；`z` 撤销；`r` 清空；`q` 退出
+- 输出：
+  - 定位：`datasets/det/labels_all/*.txt`（cls 固定 0，OBB 四点）
+  - 识别：`datasets/rec/labels_all/*.txt`（cls 按 vocab，OBB 四点）
+- 结束后运行同步：`tools/02_自动拆分_同步labels并检查.bat` 把 `labels_all` 按 train/val 对齐并检查
+
+## 4.1.1 推荐：合并标注（定位 + 识别同时进行）
+
+如果你希望“定位框 + 字符框+类别”一次标完，本项目提供：
+
+```powershell
+pyocr label-both --images datasets\\det\\images\\train --det-labels datasets\\det\\labels\\train --rec-labels datasets\\rec\\labels\\train --vocab vocab_digits.txt
+```
+
+使用说明：
+- `TAB`：切换当前编辑的是 DET 还是 REC
+- `T`：输入识别内容（例如 `1058`），然后开始画 REC 框
+- 每画完一个 REC 框：识别索引会自动 +1（自动跳到下一个字符）
+
+## 4.2 训练前检查（推荐）
+
+命令行检查示例：
+
+```powershell
+pyocr check-obb-labels --images datasets\det\images\train --labels datasets\det\labels\train --num-classes 1
+```
+
+若你在标注过程中新增了字符类别，`tools/02_自动拆分_同步labels并检查.bat` 会自动按当前词表计算 rec 类别数，无需手动改 `--num-classes`。
+
+## 4. 训练与快速评估
+
+- 一键训练+推理：双击 `tools/03_一键训练_det_rec并推理抽查.bat`
+  - 可选参数：`03_一键训练_det_rec并推理抽查.bat 100 640 16 0 det_exp rec_exp`
+  - 输出：`models/runs/<日期_时间>/train_det.log|train_rec.log`；推理截图在 `infer_train/`、`infer_val/`
+
+- 手动命令（示例，已激活环境）：
+```powershell
+pyocr train-det --data datasets\det\det.yaml --epochs 50 --imgsz 640 --batch 8  --device 0 --project models --name det_exp
+pyocr train-rec --data datasets\rec\rec.yaml --epochs 50 --imgsz 640 --batch 16 --device 0 --project models --name rec_exp
+pyocr infer --det-weights models\det_exp\weights\best.pt --rec-weights models\rec_exp\weights\best.pt --image Images\trains\1_7_131830248.bmp --vocab vocab_rec.txt
+```
+
+## 5. Qt 训练工具
+
+```powershell
+pyocr-qt
+```
+
+- 中文界面；封装 `pyocr train-det/train-rec`；可实时查看日志。
+
+## 6. 目录约定
+
+- 代码：`src/pyocr`；Qt：`qt_app/`
+- 数据：`datasets/det|rec/images|labels|labels_all`
+- 权重/日志：`models/`
+- 词表：`vocab_rec.txt`
+
+## 目录约定
+- `src/pyocr/`：核心 CLI/训练/推理封装
+- `qt_app/`：PySide6 桌面工具
+- `datasets/`：训练数据集输出
+- `models/`：训练输出（权重/日志）
+

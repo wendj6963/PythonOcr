@@ -1,0 +1,17 @@
+README.md
+pyproject.toml
+src/pyocr/__init__.py
+src/pyocr/__main__.py
+src/pyocr/cli.py
+src/pyocr/dataset_prep.py
+src/pyocr/label_check.py
+src/pyocr/label_tool.py
+src/pyocr/paths.py
+src/pyocr/pipeline.py
+src/pyocr/yolo_backend.py
+src/pythonocr.egg-info/PKG-INFO
+src/pythonocr.egg-info/SOURCES.txt
+src/pythonocr.egg-info/dependency_links.txt
+src/pythonocr.egg-info/entry_points.txt
+src/pythonocr.egg-info/requires.txt
+src/pythonocr.egg-info/top_level.txt

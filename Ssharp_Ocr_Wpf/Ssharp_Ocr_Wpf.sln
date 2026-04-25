@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36930.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ssharp_Ocr_Wpf", "Ssharp_Ocr_Wpf.csproj", "{89E64EF3-E96F-4A06-96A2-074B54CA2291}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Debug|x64 = Debug|x64
+		Release|Any CPU = Release|Any CPU
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{89E64EF3-E96F-4A06-96A2-074B54CA2291}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{89E64EF3-E96F-4A06-96A2-074B54CA2291}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{89E64EF3-E96F-4A06-96A2-074B54CA2291}.Debug|x64.ActiveCfg = Debug|x64
+		{89E64EF3-E96F-4A06-96A2-074B54CA2291}.Debug|x64.Build.0 = Debug|x64
+		{89E64EF3-E96F-4A06-96A2-074B54CA2291}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{89E64EF3-E96F-4A06-96A2-074B54CA2291}.Release|Any CPU.Build.0 = Release|Any CPU
+		{89E64EF3-E96F-4A06-96A2-074B54CA2291}.Release|x64.ActiveCfg = Release|x64
+		{89E64EF3-E96F-4A06-96A2-074B54CA2291}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {B9919A49-1357-4650-AA0F-5EBAF730AD6F}
+	EndGlobalSection
+EndGlobal

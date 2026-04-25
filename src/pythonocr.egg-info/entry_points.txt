@@ -1,0 +1,3 @@
+[console_scripts]
+pyocr = pyocr.cli:main
+pyocr-qt = qt_app.main:main

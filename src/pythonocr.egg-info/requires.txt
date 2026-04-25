@@ -1,0 +1,11 @@
+ultralytics==8.4.23
+opencv-python==4.13.0.92
+numpy==1.26.4
+Pillow==12.1.1
+pydantic==2.12.5
+PySide6==6.10.2
+tqdm==4.67.3
+cryptography==42.0.8
+onnx==1.16.1
+onnxslim==0.1.71
+onnxruntime-gpu==1.18.1
