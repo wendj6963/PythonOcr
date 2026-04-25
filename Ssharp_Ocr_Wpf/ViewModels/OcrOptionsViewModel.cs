@@ -63,7 +63,7 @@ namespace Ssharp_Ocr_Wpf.ViewModels
         /// <summary>
         /// 识别置信度阈值。
         /// </summary>
-        public double RecConf { get; set; } = 0.25;
+        public double RecConf { get; set; } = 0.20;// 0.25;
         /// <summary>
         /// 识别 NMS IoU 阈值。
         /// </summary>
@@ -75,11 +75,11 @@ namespace Ssharp_Ocr_Wpf.ViewModels
         /// <summary>
         /// 识别最小框边长。
         /// </summary>
-        public int RecMinBox { get; set; } = 4;
+        public int RecMinBox { get; set; } = 2;//4
         /// <summary>
         /// 识别最小分数。
         /// </summary>
-        public double RecMinScore { get; set; } = 0.5;
+        public double RecMinScore { get; set; } = 0.35;//0.5;
         /// <summary>
         /// 识别翻转增强开关。
         /// </summary>
@@ -129,11 +129,11 @@ namespace Ssharp_Ocr_Wpf.ViewModels
         /// <summary>
         /// ROI Padding 比例。
         /// </summary>
-        public double RoiPadRatio { get; set; } = 0;
+        public double RoiPadRatio { get; set; } = 0.06;//0;
         /// <summary>
         /// ROI Padding 像素。
         /// </summary>
-        public int RoiPadPx { get; set; } = 0;
+        public int RoiPadPx { get; set; } = 4;//0;
         /// <summary>
         /// 识别行分组阈值。
         /// </summary>

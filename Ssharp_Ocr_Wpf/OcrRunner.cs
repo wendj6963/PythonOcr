@@ -639,7 +639,7 @@ namespace Ssharp_Ocr_Wpf
             var recOut = RunRecognizerRaw(roi, recImgSize, _options.RecConf, _options.RecIou);
 
             var expectedLen = ExpectedLenForRoi(_options, roiIndex);
-            var perTopN = _options.RecTopN;//expectedLen ?? _options.RecTopN;
+            var perTopN = expectedLen ?? _options.RecTopN;
 
             List<string> textParts;
             List<double> scores;
