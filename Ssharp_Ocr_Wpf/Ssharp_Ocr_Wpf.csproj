@@ -135,16 +135,16 @@
       <Generator>ResXFileCodeGenerator</Generator>
       <LastGenOutput>Resources.Designer.cs</LastGenOutput>
     </EmbeddedResource>
-    <Content Include="onnx\det_best.onnx.enc">
+    <Content Include="onnx\det.onnx">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
-    <Content Include="onnx\rec_best.onnx.enc">
+    <Content Include="onnx\det.onnx.enc">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
-    <Content Include="onnx\det_best.onnx">
+    <Content Include="onnx\rec.onnx">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
-    <Content Include="onnx\rec_best.onnx">
+    <Content Include="onnx\rec.onnx.enc">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
     <None Include="packages.config" />

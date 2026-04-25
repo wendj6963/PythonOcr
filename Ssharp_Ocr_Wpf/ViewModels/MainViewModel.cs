@@ -68,9 +68,9 @@ namespace Ssharp_Ocr_Wpf.ViewModels
 
         public RelayCommand NextRoiCommand { get; }
 
-        public string DetModelPath { get; set; }=AppDomain.CurrentDomain.BaseDirectory + "onnx\\det_best.onnx.enc";
+        public string DetModelPath { get; set; }=AppDomain.CurrentDomain.BaseDirectory + "onnx\\det.onnx.enc";
 
-        public string RecModelPath { get; set; }=AppDomain.CurrentDomain.BaseDirectory + "onnx\\rec_best.onnx.enc";
+        public string RecModelPath { get; set; }=AppDomain.CurrentDomain.BaseDirectory + "onnx\\rec.onnx.enc";
 
         public string Passphrase { get; set; } = "PG&shuyun@568.com";
 

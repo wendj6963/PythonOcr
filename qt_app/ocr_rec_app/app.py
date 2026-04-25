@@ -42,8 +42,8 @@ DEFAULT_CONFIG = {
     "paths": {
         "image": "C:\\Users\\admin\\Desktop\\2_5_095949528.bmp",
         "image_dir": "",
-        "det_model": "C:\\Users\\admin\\Desktop\\PythonOcr\\runs\\obb\\models\\det_exp\\weights\\best.pt",
-        "rec_model": "C:\\Users\\admin\\Desktop\\PythonOcr\\runs\\obb\\models\\rec_exp\\weights\\best.pt",
+        "det_model": "C:\\Users\\admin\\Desktop\\PythonOcr\\runs\\obb\\models\\det_exp\\weights\\det.pt",
+        "rec_model": "C:\\Users\\admin\\Desktop\\PythonOcr\\runs\\obb\\models\\rec_exp\\weights\\rec.pt",
         "vocab": "vocab_rec.txt",
     },
     "params": {
@@ -930,8 +930,8 @@ class OcrRecMainWindow(QMainWindow):
                 int(self.det_imgsz.value()),
                 out_dir,
                 key,
-                onnx_name="det_best.onnx",
-                enc_name="det_best.onnx.enc",
+                onnx_name="det.onnx",
+                enc_name="det.onnx.enc",
                 nms=True,
             )
             rec_res = export_and_encrypt(
@@ -939,12 +939,27 @@ class OcrRecMainWindow(QMainWindow):
                 int(self.rec_imgsz.value()),
                 out_dir,
                 key,
-                onnx_name="rec_best.onnx",
-                enc_name="rec_best.onnx.enc",
+                onnx_name="rec.onnx",
+                enc_name="rec.onnx.enc",
                 nms=True,
             )
         except Exception as exc:
             self._log(f"导出失败: {exc}")
+            return
+
+        min_delta = 69
+        max_delta = 84
+        det_delta = det_res.bytes_out - det_res.bytes_in
+        rec_delta = rec_res.bytes_out - rec_res.bytes_in
+        self._log(f"det.onnx.enc 比 det.onnx 大 {det_delta} bytes")
+        self._log(f"rec.onnx.enc 比 rec.onnx 大 {rec_delta} bytes")
+
+        def _delta_ok(delta: int) -> bool:
+            return min_delta <= delta <= max_delta
+
+        if not _delta_ok(det_delta) or not _delta_ok(rec_delta):
+            self._log(f"加密文件大小异常：差值不在 {min_delta}~{max_delta} bytes 范围内")
+            QMessageBox.warning(self, "加密校验失败", "加密文件大小异常，请检查导出/加密流程。")
             return
 
         self._log(f"定位模型导出: {det_res.onnx_path}")
