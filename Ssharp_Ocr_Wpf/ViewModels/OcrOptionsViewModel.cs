@@ -89,9 +89,11 @@ namespace Ssharp_Ocr_Wpf.ViewModels
         /// </summary>
         public double RecFlipMinScore { get; set; } = 0.5;
         /// <summary>
-        /// 识别最大检测数。
+        /// 识别最大检测数（raw decode 上限，与 Python ultralytics 默认对齐为 300，
+        /// 实际每个 ROI 的字符数仍由 RoiExpectedLengths 控制；
+        /// 设过小会让 ROI2 的 14 个字符踩线，也会限制 ROI3 的候选）。
         /// </summary>
-        public int RecMaxDet { get; set; } = 14;
+        public int RecMaxDet { get; set; } = 300;
         /// <summary>
         /// 识别类别数。
         /// </summary>

@@ -176,6 +176,7 @@ namespace Ssharp_Ocr_Wpf
             return SortPolys(filtered, sortBy, rowThresh);
         }
 
+
         // 将识别框转换为文本与置信度
         private (List<string> text, List<double> scores, List<CharBox> charBoxes) RecTextFromBoxes(List<DetBox> boxes)
         {
@@ -478,16 +479,24 @@ namespace Ssharp_Ocr_Wpf
                         continue;
 
                     var quad = OrderPoints(poly.Quad);
-                    var quadExpanded = (_options.RoiPadRatio > 0 || _options.RoiPadPx > 0)
-                        ? ExpandQuad(quad, _options.RoiPadRatio, _options.RoiPadPx)
+                    // 按 ROI 序号选择 pre-warp 扩边比例（例如 Roi3 给更大值，让 rec 看到完整大字字形）。
+                    var roiPadRatio = ResolveRoiPadRatio(roiIndex);
+                    var quadExpanded = (roiPadRatio > 0 || _options.RoiPadPx > 0)
+                        ? ExpandQuad(quad, roiPadRatio, _options.RoiPadPx)
                         : quad;
 
                     var roi = WarpQuad(img, quadExpanded);
                     roiPreviews.Add(roi.Clone());
 
-                    var recResult = RunRecognizer(roi, roiIndex, minScore, flipMinScore);
+                    var recResult = RunRecognizerWithContextPad(roi, roiIndex, minScore, flipMinScore);
                     var rect = QuadToAxisAligned(quad);
-                    var mappedCharBoxes = MapCharBoxesToImage(recResult.CharBoxes, quad);
+                    // 修复：字符框反映射必须与 WarpQuad 使用同一 quadExpanded，
+                    // 否则 ROI 实际尺寸与反向透视 src 尺寸不一致，字符回显框整体偏移/缩放，
+                    // 在小 ROI（如 Roi3 仅 2 位数字）上偏差最明显，表现为"回显字符不正确"。
+                    // 注：边界 clamp 已经在 RunRecognizer 内部 ROI-local 空间完成，
+                    // 不再在图像空间用轴对齐 rect 去 clamp 旋转 quad（那样会夷平旋转角度）。
+                    var mappedCharBoxes = MapCharBoxesToImage(recResult.CharBoxes, quadExpanded);
+                    // Qt 同款：定位回显显示原始 det quad；识别与字符框映射仍使用 quadExpanded。
                     outBoxes.Add(new OcrBox(rect, quad, recResult.Text, recResult.Score, roiIndex, mappedCharBoxes));
                 }
 
@@ -513,7 +522,7 @@ namespace Ssharp_Ocr_Wpf
                         roiIndex++;
                         var roi = img.SubMat(candidate);
                         roiPreviews.Add(roi.Clone());
-                        var recResult = RunRecognizer(roi, roiIndex, minScore, flipMinScore);
+                        var recResult = RunRecognizerWithContextPad(roi, roiIndex, minScore, flipMinScore);
                         var mappedCharBoxes = MapCharBoxesToImage(recResult.CharBoxes, candidate);
                         outBoxes.Add(new OcrBox(candidate, null, recResult.Text, recResult.Score, roiIndex, mappedCharBoxes));
                     }
@@ -553,7 +562,7 @@ namespace Ssharp_Ocr_Wpf
                         roiIndex++;
                         var roi = img.SubMat(bestRect);
                         roiPreviews.Add(roi.Clone());
-                        var recResult = RunRecognizer(roi, roiIndex, minScore, flipMinScore);
+                        var recResult = RunRecognizerWithContextPad(roi, roiIndex, minScore, flipMinScore);
                         var mappedCharBoxes = MapCharBoxesToImage(recResult.CharBoxes, bestRect);
                         outBoxes.Add(new OcrBox(bestRect, null, recResult.Text, recResult.Score, roiIndex, mappedCharBoxes));
                     }
@@ -590,7 +599,7 @@ namespace Ssharp_Ocr_Wpf
                     var roi = img.SubMat(rect);
                     roiPreviews.Add(roi.Clone());
 
-                    var recResult = RunRecognizer(roi, roiIndex, minScore, flipMinScore);
+                    var recResult = RunRecognizerWithContextPad(roi, roiIndex, minScore, flipMinScore);
                     var mappedCharBoxes = MapCharBoxesToImage(recResult.CharBoxes, rect);
                     outBoxes.Add(new OcrBox(rect, null, recResult.Text, recResult.Score, roiIndex, mappedCharBoxes));
                 }
@@ -640,13 +649,14 @@ namespace Ssharp_Ocr_Wpf
 
             var expectedLen = ExpectedLenForRoi(_options, roiIndex);
             var perTopN = expectedLen ?? _options.RecTopN;
+            var recPostIou = _options.RecOutputFormat == OutputFormat.Auto ? _options.RecIou : 0.0;
 
             List<string> textParts;
             List<double> scores;
             List<CharBox> charBoxes;
             if (recOut.Polys.Count > 0)
             {
-                var filteredPolys = FilterRecPolys(recOut.Polys, _options.SortBy, minScore, perTopN, _options.RecMinBox, _options.RecRowThresh, _options.RecIou);
+                var filteredPolys = FilterRecPolys(recOut.Polys, _options.SortBy, minScore, perTopN, _options.RecMinBox, _options.RecRowThresh, recPostIou);
                 var recTexts = RecTextFromPolys(filteredPolys);
                 textParts = recTexts.text;
                 scores = recTexts.scores;
@@ -654,7 +664,7 @@ namespace Ssharp_Ocr_Wpf
             }
             else
             {
-                var filtered = FilterRecBoxes(recOut.Boxes, _options.SortBy, minScore, perTopN, _options.RecMinBox, _options.RecRowThresh, _options.RecIou);
+                var filtered = FilterRecBoxes(recOut.Boxes, _options.SortBy, minScore, perTopN, _options.RecMinBox, _options.RecRowThresh, recPostIou);
                 var recTexts = RecTextFromBoxes(filtered);
                 textParts = recTexts.text;
                 scores = recTexts.scores;
@@ -672,7 +682,7 @@ namespace Ssharp_Ocr_Wpf
                 var roiFlip = roi.Flip(FlipMode.XY);
                 var recImgSizeFlip = ChooseRecImgSize(roiFlip, _options, _recInputSize);
                 var recOutFlip = RunRecognizerRaw(roiFlip, recImgSizeFlip, _options.RecConf, _options.RecIou);
-                var filteredFlip = FilterRecBoxes(recOutFlip.Boxes, _options.SortBy, flipMinScore, perTopN, _options.RecMinBox, _options.RecRowThresh, _options.RecIou);
+                var filteredFlip = FilterRecBoxes(recOutFlip.Boxes, _options.SortBy, flipMinScore, perTopN, _options.RecMinBox, _options.RecRowThresh, recPostIou);
                 var (flipText, flipScores, _) = RecTextFromBoxes(filteredFlip);
 
                 if (expectedLen.HasValue && flipText.Count > expectedLen.Value)
@@ -692,6 +702,35 @@ namespace Ssharp_Ocr_Wpf
 
             var text = string.Concat(textParts);
             var score = scores.Count > 0 ? scores.Average() : 0.0;
+
+            // 在 ROI 局部坐标系内对字符框做按 ROI 序号的扩边，
+            // 用于补偿大/粗字符（典型：Roi3 的 2 位数字）上 YOLO 回归头偏紧的倾向。
+            // 必须在 MapCharBoxesToImage 之前完成，因为这里的坐标系还是 ROI warp 后的方形空间。
+            var charPadRatio = ResolveCharPadRatio(roiIndex);
+            if (charPadRatio > 0 && charBoxes != null && charBoxes.Count > 0)
+            {
+                charBoxes = ExpandCharBoxesInRoi(charBoxes, charPadRatio, roi.Cols, roi.Rows);
+                _options.Log?.Invoke($"roi#{roiIndex} char-box 扩边 {charPadRatio:F2}（rec 端补偿）");
+            }
+
+            // 不再依赖定位 ROI 扩边比例来控制字符框范围。
+            // 识别上下文扩边由 RunRecognizerWithContextPad 单独处理，并在返回前反投回原 ROI 边界。
+
+            // 保持输出文本与最终回显字符框一致，避免"只有1个框却有2个字符"。
+            if (charBoxes != null)
+            {
+                if (charBoxes.Count == 0)
+                {
+                    text = string.Empty;
+                    score = 0.0;
+                }
+                else
+                {
+                    text = string.Concat(charBoxes.Select(c => c.Text));
+                    score = charBoxes.Average(c => c.Score);
+                }
+            }
+
             return new RecResult(text, score, charBoxes);
         }
 
@@ -708,6 +747,217 @@ namespace Ssharp_Ocr_Wpf
             var expected = options.RoiExpectedLengths[idx];
             return expected > 0 ? (int?)expected : null;
         }
+
+        // 解析每个 ROI 的 pre-warp 扩边比例：优先 RoiPadRatios[index]，否则回退 RoiPadRatio
+        private double ResolveRoiPadRatio(int roiIndex)
+        {
+            var arr = _options.RoiPadRatios;
+            if (arr != null)
+            {
+                var idx = roiIndex - 1;
+                if (idx >= 0 && idx < arr.Length && arr[idx] >= 0)
+                    return arr[idx];
+            }
+            return _options.RoiPadRatio;
+        }
+
+        // 解析每个 ROI 的 char-box 扩边比例：优先 RecCharPadRatios[index]，否则回退 RecCharPadRatio
+        private double ResolveCharPadRatio(int roiIndex)
+        {
+            var arr = _options.RecCharPadRatios;
+            if (arr != null)
+            {
+                var idx = roiIndex - 1;
+                if (idx >= 0 && idx < arr.Length && arr[idx] >= 0)
+                    return arr[idx];
+            }
+            return _options.RecCharPadRatio;
+        }
+
+        // 解析每个 ROI 的识别上下文扩边比例：优先 RecRoiPadRatios[index]，否则回退 RecRoiPadRatio
+        private double ResolveRecRoiPadRatio(int roiIndex)
+        {
+            var arr = _options.RecRoiPadRatios;
+            if (arr != null)
+            {
+                var idx = roiIndex - 1;
+                if (idx >= 0 && idx < arr.Length && arr[idx] >= 0)
+                    return arr[idx];
+            }
+            return _options.RecRoiPadRatio;
+        }
+
+        // 不改变定位回显框的前提下，为识别单独增加 ROI 上下文（仿 Qt 的 ROI 扩边输入效果）。
+        private RecResult RunRecognizerWithContextPad(Mat roi, int roiIndex, double minScore, double flipMinScore)
+        {
+            var recRoiPadRatio = ResolveRecRoiPadRatio(roiIndex);
+            using (var recInput = BuildRecInputRoi(roi, recRoiPadRatio, _options.RecRoiPadPx, out var padX, out var padY))
+            {
+                var recResult = RunRecognizer(recInput, roiIndex, minScore, flipMinScore);
+                var remapped = UnpadCharBoxesFromRoi(recResult.CharBoxes, padX, padY, roi.Cols, roi.Rows);
+                if (remapped == null)
+                    return recResult;
+
+                var text = remapped.Count == 0 ? string.Empty : string.Concat(remapped.Select(c => c.Text));
+                var score = remapped.Count == 0 ? 0.0 : remapped.Average(c => c.Score);
+                return new RecResult(text, score, remapped);
+            }
+        }
+
+        // 在 ROI 局部坐标系内扩展字符框（rect + quad），用于补偿大/粗字符上的过紧回归。
+        // 仅修改尺寸，不改变中心；rect 边界裁剪到 [0, roiW]×[0, roiH]，quad 不裁剪以保持透视形状。
+        private static List<CharBox> ExpandCharBoxesInRoi(List<CharBox> charBoxes, double ratio, int roiW, int roiH)
+        {
+            if (charBoxes == null || charBoxes.Count == 0 || ratio <= 0)
+                return charBoxes;
+
+            var maxX = Math.Max(roiW, 1);
+            var maxY = Math.Max(roiH, 1);
+
+            var result = new List<CharBox>(charBoxes.Count);
+            foreach (var b in charBoxes)
+            {
+                var pad = (int)Math.Round(Math.Max(b.Rect.Width, b.Rect.Height) * ratio);
+                if (pad < 1) pad = 1;
+                var x1 = Math.Max(0, b.Rect.Left - pad);
+                var y1 = Math.Max(0, b.Rect.Top - pad);
+                var x2 = Math.Min(maxX, b.Rect.Right + pad);
+                var y2 = Math.Min(maxY, b.Rect.Bottom + pad);
+                var newRect = new Rect(x1, y1, Math.Max(1, x2 - x1), Math.Max(1, y2 - y1));
+
+                Point2f[] newQuad = null;
+                if (b.Quad != null && b.Quad.Length == 4)
+                {
+                    var cx = (b.Quad[0].X + b.Quad[1].X + b.Quad[2].X + b.Quad[3].X) / 4f;
+                    var cy = (b.Quad[0].Y + b.Quad[1].Y + b.Quad[2].Y + b.Quad[3].Y) / 4f;
+                    var s = (float)(1.0 + ratio);
+                    // 关键：放大后必须把 quad 顶点 clamp 到 ROI 局部 [0..roiW]×[0..roiH]。
+                    // 否则下游 MapCharBoxesToImage 用 GetPerspectiveTransform(src=ROI 局部矩形 → dst=det quadExpanded)
+                    // 时，src 中超出 [0..w]×[0..h] 的点会被映射到 dst（det quad）外部，
+                    // 表现为 Roi3 的字符框越界踩进相邻 Roi2 的区域。
+                    newQuad = b.Quad.Select(p =>
+                    {
+                        var nx = (p.X - cx) * s + cx;
+                        var ny = (p.Y - cy) * s + cy;
+                        if (nx < 0) nx = 0;
+                        if (ny < 0) ny = 0;
+                        if (nx > maxX) nx = maxX;
+                        if (ny > maxY) ny = maxY;
+                        return new Point2f(nx, ny);
+                    }).ToArray();
+                }
+
+                result.Add(new CharBox(newRect, newQuad, b.Text, b.Score));
+            }
+            return result;
+        }
+
+        // 为识别输入在 ROI 四周补边（不改变定位框）。
+        private static Mat BuildRecInputRoi(Mat roi, double padRatio, int padPx, out int padX, out int padY)
+        {
+            var ratio = Math.Max(0.0, padRatio);
+            var px = Math.Max(0, padPx);
+            var pad = Math.Max((int)Math.Round(Math.Max(roi.Cols, roi.Rows) * ratio), px);
+            if (pad <= 0)
+            {
+                padX = 0;
+                padY = 0;
+                return roi.Clone();
+            }
+
+            padX = pad;
+            padY = pad;
+            var outMat = new Mat();
+            Cv2.CopyMakeBorder(roi, outMat, pad, pad, pad, pad, BorderTypes.Constant, new Scalar(114, 114, 114));
+            return outMat;
+        }
+
+        // 将在补边 ROI 上得到的字符框反投回原 ROI 坐标，并裁剪到原 ROI 边界。
+        private static List<CharBox> UnpadCharBoxesFromRoi(List<CharBox> charBoxes, int padX, int padY, int roiW, int roiH)
+        {
+            if (charBoxes == null)
+                return null;
+            if (charBoxes.Count == 0)
+                return charBoxes;
+            if (padX <= 0 && padY <= 0)
+                return charBoxes;
+
+            var maxX = Math.Max(roiW, 1);
+            var maxY = Math.Max(roiH, 1);
+            var remapped = new List<CharBox>(charBoxes.Count);
+            foreach (var b in charBoxes)
+            {
+                var x1 = Math.Max(0, b.Rect.Left - padX);
+                var y1 = Math.Max(0, b.Rect.Top - padY);
+                var x2 = Math.Min(maxX, b.Rect.Right - padX);
+                var y2 = Math.Min(maxY, b.Rect.Bottom - padY);
+                if (x2 <= x1 || y2 <= y1)
+                    continue;
+
+                Point2f[] quad = null;
+                if (b.Quad != null && b.Quad.Length == 4)
+                {
+                    quad = b.Quad.Select(p => new Point2f(
+                        Math.Max(0, Math.Min(maxX, p.X - padX)),
+                        Math.Max(0, Math.Min(maxY, p.Y - padY)))).ToArray();
+                }
+
+                remapped.Add(new CharBox(new Rect(x1, y1, x2 - x1, y2 - y1), quad, b.Text, b.Score));
+            }
+            return remapped;
+        }
+
+        private static bool ShouldApplyRecPostNms(OcrOptions options)
+        {
+            // ONNX 已导出 NMS 时，避免再次 NMS 造成短文本字符被抑制（如 Roi3）
+            return options.RecOutputFormat == OutputFormat.Auto;
+        }
+
+        // ROI 局部坐标系内的轴对齐裁剪。
+        // 用于把扩边后的字符框 clamp 回"原始 det quad 在 ROI-local 空间对应的中心矩形"，
+        // 从而保证：
+        //   1) 字符框不会越过原始 det quad（视觉上不出 Roi3 显示框）；
+        //   2) ROI-local 空间内 char quad 是轴对齐的，逐点 clamp 不损失旋转，
+        //      下游 MapCharBoxesToImage 做透视变换时，旋转角度由 det quad 自然带入。
+        private static List<CharBox> ClampCharBoxesInRoi(List<CharBox> charBoxes, Rect clipRect)
+        {
+            if (charBoxes == null || charBoxes.Count == 0)
+                return charBoxes;
+            if (clipRect.Width <= 0 || clipRect.Height <= 0)
+                return charBoxes;
+
+            var minX = clipRect.Left;
+            var minY = clipRect.Top;
+            var maxX = clipRect.Right;
+            var maxY = clipRect.Bottom;
+
+            var result = new List<CharBox>(charBoxes.Count);
+            foreach (var b in charBoxes)
+            {
+                var x1 = Math.Max(minX, b.Rect.Left);
+                var y1 = Math.Max(minY, b.Rect.Top);
+                var x2 = Math.Min(maxX, b.Rect.Right);
+                var y2 = Math.Min(maxY, b.Rect.Bottom);
+                if (x2 <= x1 || y2 <= y1)
+                    continue; // 完全在 ROI 中心区外，丢弃
+                var newRect = new Rect(x1, y1, x2 - x1, y2 - y1);
+
+                Point2f[] newQuad = null;
+                if (b.Quad != null && b.Quad.Length == 4)
+                {
+                    newQuad = b.Quad.Select(p => new Point2f(
+                        Math.Max(minX, Math.Min(maxX, p.X)),
+                        Math.Max(minY, Math.Min(maxY, p.Y)))).ToArray();
+                }
+                result.Add(new CharBox(newRect, newQuad, b.Text, b.Score));
+            }
+            return result;
+        }
+
+        // 已弃用：原"图像空间下用轴对齐 rect 裁剪 char quad" 的实现
+        // 会把任何越界顶点 snap 到轴对齐边缘，从而把旋转 quad 夷平成轴对齐矩形，
+        // 表现为 Roi3 字符框失去角度。新方案改在 ROI 局部空间用 ClampCharBoxesInRoi 完成裁剪，
+        // 此处不再保留实现，避免误用。
 
         private static List<CharBox> MapCharBoxesToImage(List<CharBox> charBoxes, Rect roiRect)
         {
@@ -825,7 +1075,7 @@ namespace Ssharp_Ocr_Wpf
             var h2 = Distance(rect[1], rect[2]);
             var width = Math.Max(w1, w2);
             var height = Math.Max(h1, h2);
-            var pad = Math.Max(width, height) * Math.Max(padRatio, 0) + Math.Max(padPx, 0) * 2.0;
+            var pad = Math.Max((int)Math.Round(Math.Max(width, height) * padRatio), padPx);
             var scale = 1.0 + pad / Math.Max(width, height);
             var center = new Point2f((rect[0].X + rect[2].X) / 2f, (rect[0].Y + rect[2].Y) / 2f);
             for (var i = 0; i < rect.Length; i++)
@@ -1263,14 +1513,32 @@ namespace Ssharp_Ocr_Wpf
                 }
             }
 
-            var nms = classCount > 1
-                ? NmsBoxesByClass(boxes, iouThresh, maxDet)
-                : NmsBoxes(boxes, iouThresh, maxDet);
-            var kept = nms.Select(idx => boxes[idx]).ToList();
+            List<DetBox> kept;
+            List<DetPoly> keptPolys;
+            var isAlreadyNmsOutput = format == OutputFormat.NmsXyxy || format == OutputFormat.NmsXywha;
+            if (isAlreadyNmsOutput)
+            {
+                kept = boxes;
+                keptPolys = polys;
 
-            var keptPolys = NmsPolys(polys, iouThresh, maxDet);
+                if (maxDet > 0)
+                {
+                    if (kept.Count > maxDet)
+                        kept = kept.Take(maxDet).ToList();
+                    if (keptPolys.Count > maxDet)
+                        keptPolys = keptPolys.Take(maxDet).ToList();
+                }
+            }
+            else
+            {
+                var nms = classCount > 1
+                    ? NmsBoxesByClass(boxes, iouThresh, maxDet)
+                    : NmsBoxes(boxes, iouThresh, maxDet);
+                kept = nms.Select(idx => boxes[idx]).ToList();
+                keptPolys = NmsPolys(polys, iouThresh, maxDet);
+            }
 
-            return new DetOutput(kept, keptPolys);
+             return new DetOutput(kept, keptPolys);
         }
 
         private static void LogRecRawOutput(Tensor<float> output, int rows, Action<string> log, int classCount, bool useSigmoidRaw, int classStartOffset, bool hasObj, bool hasAngle)
@@ -1526,7 +1794,8 @@ namespace Ssharp_Ocr_Wpf
         }
 
         // 读取包含中文路径的图片
-        private static Mat ReadImageUnicode(string path)
+        private static Mat ReadImageUnicode(string path
+        )
         {
             var bytes = File.ReadAllBytes(path);
             return Cv2.ImDecode(bytes, ImreadModes.Color);
@@ -1999,6 +2268,58 @@ namespace Ssharp_Ocr_Wpf
 
         public double RoiPadRatio { get; set; } = 0.06;// 与 Qt 解码测试工具保持一致
         public int RoiPadPx { get; set; } = 4;// 与 Qt 解码测试工具保持一致
+
+        /// <summary>
+        /// 识别阶段的 ROI 额外上下文扩边（不影响定位回显）。
+        /// 例如 0.20 表示在 ROI 四周额外补 20% 的边，再送入 rec；
+        /// 最终字符框会反投回原 ROI 范围，不会越过定位回显框。
+        /// </summary>
+        public double RecRoiPadRatio { get; set; } = 0.0;
+        public int RecRoiPadPx { get; set; } = 0;
+
+        /// <summary>
+        /// 每个 ROI 单独的识别上下文扩边比例（优先级高于 RecRoiPadRatio）。
+        /// 推荐：Roi1/2 保持 0，Roi3 设 0.20~0.35。
+        /// 例："0,0,0.25"。 
+        /// </summary>
+        public double[] RecRoiPadRatios { get; set; } = { 0.0, 0.0, 0.45 };
+        public string RecRoiPadRatiosText
+        {
+            get => RecRoiPadRatios == null ? string.Empty : string.Join(",", RecRoiPadRatios.Select(v => v.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            set => RecRoiPadRatios = ParseDoubleList(value);
+        }
+
+        /// <summary>
+        /// 每个 ROI 单独的 pre-warp 扩边比例（相对长边）。例如 "0.06,0.06,0.06"
+        /// 表示 Roi1=6%, Roi2=6%, Roi3=6%。负值或越界则回退到全局 <see cref="RoiPadRatio"/>。
+        /// </summary>
+        public double[] RoiPadRatios { get; set; } = { 0.06, 0.06, 0.06 };
+        public string RoiPadRatiosText
+        {
+            get => RoiPadRatios == null ? string.Empty : string.Join(",", RoiPadRatios.Select(v => v.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            set => RoiPadRatios = ParseDoubleList(value);
+        }
+
+        /// <summary>
+        /// rec 解码出的字符框在 ROI 局部坐标系下额外向外扩展的比例。0 表示不调整。
+        /// 用于补偿大/粗字符上 YOLO 回归头的"过紧"倾向（典型：Roi3 的 2 位数字）。
+        /// </summary>
+        public double RecCharPadRatio { get; set; } = 0.0;
+
+        /// <summary>
+        /// 每个 ROI 单独的字符框扩边比例。负值或越界回退到 <see cref="RecCharPadRatio"/>。
+        /// 例如 "0,0,0.20" → 仅对 Roi3 的 char box 外扩 20%。
+        /// 经验值：Roi3 的 "1" 用较小比例就够，但 "0"/"8" 等宽字形需要 ~0.20 才能完整包住；
+        /// 超出部分由 ExpandCharBoxesInRoi 内的 quad clamp 截断在 ROI 局部边界，
+        /// 不会越界踩进相邻 Roi2 的区域。
+        /// </summary>
+        public double[] RecCharPadRatios { get; set; } = { 0.0, 0.0, 0.30 };
+        public string RecCharPadRatiosText
+        {
+            get => RecCharPadRatios == null ? string.Empty : string.Join(",", RecCharPadRatios.Select(v => v.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            set => RecCharPadRatios = ParseDoubleList(value);
+        }
+
         public double RecRowThresh { get; set; } = 0.6;
         public int[] RoiExpectedLengths { get; set; } = { 8, 14, 2 };
         public string RoiExpectedLengthsText
@@ -2025,6 +2346,22 @@ namespace Ssharp_Ocr_Wpf
             foreach (var p in parts)
             {
                 if (int.TryParse(p.Trim(), out var v) && v > 0)
+                    values.Add(v);
+            }
+            return values.Count > 0 ? values.ToArray() : null;
+        }
+
+        // 解析逗号分隔的浮点列表（用于 RoiPadRatios / RecCharPadRatios）
+        public static double[] ParseDoubleList(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return null;
+            text = text.Replace("，", ",");
+            var parts = text.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+            var values = new List<double>();
+            foreach (var p in parts)
+            {
+                if (double.TryParse(p.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v))
                     values.Add(v);
             }
             return values.Count > 0 ? values.ToArray() : null;
@@ -2182,3 +2519,4 @@ namespace Ssharp_Ocr_Wpf
         public double Score { get; }
     }
 }
+
