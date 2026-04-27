@@ -25,6 +25,8 @@ namespace Ssharp_Ocr_Wpf
         private readonly Dictionary<int, string> _vocab;
         private readonly int? _detInputSize;
         private readonly int? _recInputSize;
+        private readonly int? _recInputHeight;
+        private readonly int? _recInputWidth;
 
         // 构造并加载加密模型，初始化推理会话与输入尺寸
         public OcrRunner(string detEncPath, string recEncPath, string passphrase, OcrOptions options)
@@ -49,6 +51,9 @@ namespace Ssharp_Ocr_Wpf
 
             _detInputSize = GetFixedSquareInputSize(_detSession);
             _recInputSize = GetFixedSquareInputSize(_recSession);
+            var recInputShape = GetFixedInputShape(_recSession);
+            _recInputHeight = recInputShape.height;
+            _recInputWidth = recInputShape.width;
 
             // 对齐识别类别数（优先使用 vocab，其次使用模型输出维度推断）
             AlignRecClassCount(_recSession, _options, _vocab);
@@ -240,6 +245,18 @@ namespace Ssharp_Ocr_Wpf
             if (h > 0 && w > 0 && h == w)
                 return (int)h;
             return null;
+        }
+
+        // 读取模型输入高宽；动态维度返回 null。
+        private static (int? height, int? width) GetFixedInputShape(InferenceSession session)
+        {
+            var meta = session.InputMetadata.Values.FirstOrDefault();
+            if (meta == null || meta.Dimensions == null || meta.Dimensions.Length < 4)
+                return (null, null);
+
+            var h = meta.Dimensions[meta.Dimensions.Length - 2];
+            var w = meta.Dimensions[meta.Dimensions.Length - 1];
+            return (h > 0 ? (int?)h : null, w > 0 ? (int?)w : null);
         }
 
         // 对矩形框进行 NMS 去重
@@ -644,6 +661,16 @@ namespace Ssharp_Ocr_Wpf
         // 识别单个 ROI
         private RecResult RunRecognizer(Mat roi, int roiIndex, double minScore, double flipMinScore)
         {
+            if (_options.RecBackend == RecBackend.Ctc)
+            {
+                return RunRecognizerCtc(roi, roiIndex, minScore, flipMinScore);
+            }
+
+            return RunRecognizerYolo(roi, roiIndex, minScore, flipMinScore);
+        }
+
+        private RecResult RunRecognizerYolo(Mat roi, int roiIndex, double minScore, double flipMinScore)
+        {
             var recImgSize = ChooseRecImgSize(roi, _options, _recInputSize);
             var recOut = RunRecognizerRaw(roi, recImgSize, _options.RecConf, _options.RecIou);
 
@@ -734,6 +761,72 @@ namespace Ssharp_Ocr_Wpf
             return new RecResult(text, score, charBoxes);
         }
 
+        private RecResult RunRecognizerCtc(Mat roi, int roiIndex, double minScore, double flipMinScore)
+        {
+            var expectedLen = ExpectedLenForRoi(_options, roiIndex);
+            var ctcInputShape = ResolveCtcInputShape(roi);
+            _options.Log?.Invoke($"ctc input shape: [1,3,{ctcInputShape.height},{ctcInputShape.width}]");
+
+            var baseDecoded = RunRecognizerRawCtc(roi, ctcInputShape.height, ctcInputShape.width);
+            var textParts = baseDecoded.textParts;
+            var scores = baseDecoded.scores;
+
+            if (_options.RecFlipEnable)
+            {
+                var roiFlip = roi.Flip(FlipMode.XY);
+                var ctcInputShapeFlip = ResolveCtcInputShape(roiFlip);
+                var flipDecoded = RunRecognizerRawCtc(roiFlip, ctcInputShapeFlip.height, ctcInputShapeFlip.width);
+
+                var baseMean = scores.Count > 0 ? scores.Average() : 0.0;
+                var flipMean = flipDecoded.scores.Count > 0 ? flipDecoded.scores.Average() : 0.0;
+                if (flipMean >= Math.Max(baseMean, flipMinScore) && flipDecoded.textParts.Count > 0)
+                {
+                    textParts = flipDecoded.textParts;
+                    scores = flipDecoded.scores;
+                }
+            }
+
+            if (expectedLen.HasValue && textParts.Count > expectedLen.Value)
+            {
+                textParts = textParts.Take(expectedLen.Value).ToList();
+                scores = scores.Take(expectedLen.Value).ToList();
+            }
+
+            var score = scores.Count > 0 ? scores.Average() : 0.0;
+            if (score < minScore)
+            {
+                _options.Log?.Invoke($"ctc 低置信保留: roi#{roiIndex}, score={score:F4}, threshold={minScore:F4}");
+            }
+
+            var text = string.Concat(textParts);
+            _options.Log?.Invoke($"ctc roi#{roiIndex}: text='{text}', score={score:F4}, tokens={textParts.Count}");
+            return new RecResult(text, score, new List<CharBox>());
+        }
+
+        private (int height, int width) ResolveCtcInputShape(Mat roi)
+        {
+            var height = _recInputHeight ?? 48;
+            if (height <= 0)
+                height = 48;
+
+            if (_recInputWidth.HasValue && _recInputWidth.Value > 0)
+            {
+                return (height, _recInputWidth.Value);
+            }
+
+            // 与 Python 端 infer_ctc_array 对齐：动态宽模型优先使用固定配置宽度（常见为 320）。
+            var width = Math.Max(64, _options.RecImgSize > 0 ? _options.RecImgSize : 320);
+            return (height, width);
+        }
+
+        private static int AlignToMultiple(int value, int multiple)
+        {
+            if (multiple <= 1)
+                return Math.Max(1, value);
+            var aligned = (int)Math.Round(value / (double)multiple) * multiple;
+            return Math.Max(multiple, aligned);
+        }
+
         // 根据 ROI 序号获取期望长度（例如 8,14,2）
         private static int? ExpectedLenForRoi(OcrOptions options, int roiIndex)
         {
@@ -794,6 +887,11 @@ namespace Ssharp_Ocr_Wpf
             using (var recInput = BuildRecInputRoi(roi, recRoiPadRatio, _options.RecRoiPadPx, out var padX, out var padY))
             {
                 var recResult = RunRecognizer(recInput, roiIndex, minScore, flipMinScore);
+
+                // CTC 分支通常不返回逐字符框，直接保留文本与分数，避免被空框覆盖成空字符串。
+                if (recResult.CharBoxes == null || recResult.CharBoxes.Count == 0)
+                    return RetryCtcShortRoiIfNeeded(roi, roiIndex, minScore, flipMinScore, recRoiPadRatio, recResult);
+
                 var remapped = UnpadCharBoxesFromRoi(recResult.CharBoxes, padX, padY, roi.Cols, roi.Rows);
                 if (remapped == null)
                     return recResult;
@@ -802,6 +900,68 @@ namespace Ssharp_Ocr_Wpf
                 var score = remapped.Count == 0 ? 0.0 : remapped.Average(c => c.Score);
                 return new RecResult(text, score, remapped);
             }
+        }
+
+        // CTC 的 Roi3（短串）在结果为空或长度不足时，增加上下文重试以提升召回。
+        private RecResult RetryCtcShortRoiIfNeeded(
+            Mat roi,
+            int roiIndex,
+            double minScore,
+            double flipMinScore,
+            double basePadRatio,
+            RecResult baseResult)
+        {
+            if (_options.RecBackend != RecBackend.Ctc)
+                return baseResult;
+
+            var expectedLen = ExpectedLenForRoi(_options, roiIndex);
+            var isShortRoi3 = roiIndex == 3 && expectedLen.HasValue && expectedLen.Value <= 2;
+            if (!isShortRoi3)
+                return baseResult;
+
+            var baseLen = string.IsNullOrWhiteSpace(baseResult.Text) ? 0 : baseResult.Text.Length;
+            if (baseLen >= expectedLen.Value)
+                return baseResult;
+
+            var retryPadRatios = new[]
+            {
+                Math.Max(0.20, basePadRatio + 0.12),
+                Math.Max(0.35, basePadRatio + 0.24),
+            }
+                .Distinct()
+                .OrderBy(v => v)
+                .ToArray();
+
+            var bestResult = baseResult;
+            var bestLen = baseLen;
+
+            foreach (var retryPadRatio in retryPadRatios)
+            {
+                using (var retryInput = BuildRecInputRoi(roi, retryPadRatio, _options.RecRoiPadPx + 2, out _, out _))
+                {
+                    var retry = RunRecognizerCtc(retryInput, roiIndex, minScore, flipMinScore);
+                    var retryLen = string.IsNullOrWhiteSpace(retry.Text) ? 0 : retry.Text.Length;
+                    _options.Log?.Invoke($"ctc roi#{roiIndex} 短串重试: pad={retryPadRatio:F2}, len={retryLen}, text='{retry.Text}', score={retry.Score:F4}");
+
+                    if (retryLen >= expectedLen.Value)
+                        return retry;
+
+                    if (retryLen > bestLen || (retryLen == bestLen && retry.Score > bestResult.Score))
+                    {
+                        bestResult = retry;
+                        bestLen = retryLen;
+                    }
+                }
+            }
+
+            if (bestLen > baseLen)
+            {
+                _options.Log?.Invoke($"ctc roi#{roiIndex} 短串重试采用更优结果: len={bestLen}, score={bestResult.Score:F4}");
+                return bestResult;
+            }
+
+            _options.Log?.Invoke($"ctc roi#{roiIndex} 短串重试未提升，保留原结果");
+            return baseResult;
         }
 
         // 在 ROI 局部坐标系内扩展字符框（rect + quad），用于补偿大/粗字符上的过紧回归。
@@ -1246,6 +1406,177 @@ namespace Ssharp_Ocr_Wpf
 
                 return new RecOutput(decoded.Boxes, decoded.Polys);
             }
+        }
+
+        private (List<string> textParts, List<double> scores) RunRecognizerRawCtc(Mat img, int inputHeight, int inputWidth)
+        {
+            var input = PrepareInputCtc(img, inputHeight, inputWidth);
+            var tensor = ToTensor(input);
+            var inputValue = NamedOnnxValue.CreateFromTensor(_recSession.InputMetadata.Keys.First(), tensor);
+            var effectiveClassCount = _options.RecCtcClassCount > 0
+                ? _options.RecCtcClassCount
+                : (_options.RecClassCount > 0 ? _options.RecClassCount : GetVocabClassCount(_vocab));
+
+            using (var results = _recSession.Run(new[] { inputValue }))
+            {
+                var outputTensor = results.First().AsTensor<float>();
+                var decoded = DecodeCtcGreedy(
+                    outputTensor,
+                    _vocab,
+                    _options.RecCtcBlankIndex,
+                    effectiveClassCount,
+                    _options.Log
+                );
+                return decoded;
+            }
+        }
+
+        private static (List<string> textParts, List<double> scores) DecodeCtcGreedy(
+            Tensor<float> output,
+            Dictionary<int, string> vocab,
+            int blankIndex,
+            int classCount,
+            Action<string> log)
+        {
+            var shape = output.Dimensions.ToArray();
+            if (shape.Length < 2)
+                throw new InvalidOperationException("CTC 输出维度不正确，期望至少 2 维");
+
+            int timeSteps;
+            int classes;
+            Func<int, int, float> getValue;
+
+            if (shape.Length == 3)
+            {
+                var d1 = shape[1];
+                var d2 = shape[2];
+                var d1LooksClass = classCount > 0 && Math.Abs(d1 - classCount) <= Math.Abs(d2 - classCount);
+                var d2LooksClass = classCount > 0 && Math.Abs(d2 - classCount) < Math.Abs(d1 - classCount);
+                var classesOnD1 = d1LooksClass || (!d2LooksClass && d1 <= d2);
+
+                if (classesOnD1)
+                {
+                    classes = d1;
+                    timeSteps = d2;
+                    getValue = (t, c) => output[0, c, t];
+                }
+                else
+                {
+                    timeSteps = d1;
+                    classes = d2;
+                    getValue = (t, c) => output[0, t, c];
+                }
+            }
+            else
+            {
+                var d0 = shape[0];
+                var d1 = shape[1];
+                var d0LooksClass = classCount > 0 && Math.Abs(d0 - classCount) <= Math.Abs(d1 - classCount);
+                var d1LooksClass = classCount > 0 && Math.Abs(d1 - classCount) < Math.Abs(d0 - classCount);
+                var classesOnD0 = d0LooksClass || (!d1LooksClass && d0 <= d1);
+
+                if (classesOnD0)
+                {
+                    classes = d0;
+                    timeSteps = d1;
+                    getValue = (t, c) => output[c, t];
+                }
+                else
+                {
+                    timeSteps = d0;
+                    classes = d1;
+                    getValue = (t, c) => output[t, c];
+                }
+            }
+
+            if (classes <= 0 || timeSteps <= 0)
+                throw new InvalidOperationException("CTC 输出维度为空");
+
+            var blank = ResolveCtcBlankIndex(blankIndex, classes);
+            if (blank < 0 || blank >= classes)
+                blank = 0;
+
+            var tokenIds = new List<int>();
+            var tokenScores = new List<double>();
+            var prevClass = -1;
+
+            for (var t = 0; t < timeSteps; t++)
+            {
+                var bestCls = 0;
+                var bestLogit = float.NegativeInfinity;
+                for (var c = 0; c < classes; c++)
+                {
+                    var v = getValue(t, c);
+                    if (v > bestLogit)
+                    {
+                        bestLogit = v;
+                        bestCls = c;
+                    }
+                }
+
+                // CTC 贪心解码：去重并移除 blank。
+                if (bestCls == blank || bestCls == prevClass)
+                {
+                    prevClass = bestCls;
+                    continue;
+                }
+
+                var sumExp = 0.0;
+                var bestExp = 0.0;
+                for (var c = 0; c < classes; c++)
+                {
+                    var ev = Math.Exp(getValue(t, c) - bestLogit);
+                    if (c == bestCls)
+                        bestExp = ev;
+                    sumExp += ev;
+                }
+
+                tokenIds.Add(bestCls);
+                tokenScores.Add(sumExp > 0 ? bestExp / sumExp : 0.0);
+                prevClass = bestCls;
+            }
+
+            var textParts = new List<string>();
+            foreach (var id in tokenIds)
+            {
+                var vocabIndex = id - 1;
+                if (vocab.TryGetValue(vocabIndex, out var token) && !string.IsNullOrEmpty(token))
+                {
+                    if (IsUnknownToken(token))
+                        continue;
+                    textParts.Add(token);
+                }
+                else
+                {
+                    textParts.Add(vocabIndex.ToString());
+                }
+            }
+
+            log?.Invoke($"ctc decode: time={timeSteps}, class={classes}, tokens={textParts.Count}");
+            return (textParts, tokenScores);
+        }
+
+        private static int ResolveCtcBlankIndex(int blankIndex, int classes)
+        {
+            if (blankIndex >= 0)
+                return blankIndex;
+
+            // 与 Python rec_ctc_backend 对齐：CTC blank 固定为 0。
+            return 0;
+        }
+
+        private static bool IsUnknownToken(string token)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                return true;
+
+            var normalized = token.Trim().ToUpperInvariant();
+            return normalized == "UNKNOWN"
+                || normalized == "<UNK>"
+                || normalized == "[UNK]"
+                || normalized == "BLANK"
+                || normalized == "<BLANK>"
+                || normalized == "[BLANK]";
         }
 
         private static DetOutput DecodeYoloOutput(
@@ -1831,6 +2162,29 @@ namespace Ssharp_Ocr_Wpf
             return outMat;
         }
 
+        // CTC 输入预处理：等比例缩放 + 114 填充，和 Python _resize_keep_ratio 对齐。
+        private static Mat PrepareInputCtc(Mat src, int height, int width)
+        {
+            var targetW = Math.Max(1, width);
+            var targetH = Math.Max(1, height);
+            var srcW = Math.Max(1, src.Cols);
+            var srcH = Math.Max(1, src.Rows);
+            var scale = Math.Min(targetW / (double)srcW, targetH / (double)srcH);
+            var newW = Math.Max(1, (int)Math.Round(srcW * scale));
+            var newH = Math.Max(1, (int)Math.Round(srcH * scale));
+
+            var outMat = new Mat(new Size(targetW, targetH), MatType.CV_8UC3, new Scalar(114, 114, 114));
+            using (var resized = new Mat())
+            {
+                Cv2.Resize(src, resized, new Size(newW, newH), 0, 0, InterpolationFlags.Linear);
+                var x0 = (targetW - newW) / 2;
+                var y0 = (targetH - newH) / 2;
+                var roi = new Rect(x0, y0, newW, newH);
+                resized.CopyTo(new Mat(outMat, roi));
+            }
+            return outMat;
+        }
+
         // 计算 Tensor 的 min/max/mean
         private static void LogValueStats(string title, Tensor<float> output, Action<string> log)
         {
@@ -2236,6 +2590,7 @@ namespace Ssharp_Ocr_Wpf
         public OutputFormat DetOutputFormat { get; set; } = OutputFormat.NmsXyxy;
 
         public int RecImgSize { get; set; } = 320;
+        public RecBackend RecBackend { get; set; } = RecBackend.Yolo;
         public bool RecAutoImgSize { get; set; } = true;
         public int RecImgSizeMin { get; set; } = 60;
         public int RecImgSizeMax { get; set; } = 640;
@@ -2385,6 +2740,12 @@ namespace Ssharp_Ocr_Wpf
     {
         Ctc,
         YoloLike,
+    }
+
+    public enum RecBackend
+    {
+        Yolo,
+        Ctc,
     }
 
     public enum ImageChannelOrder

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
@@ -44,6 +44,7 @@ DEFAULT_CONFIG = {
         "image_dir": "",
         "det_model": "C:\\Users\\admin\\Desktop\\PythonOcr\\runs\\obb\\models\\det_exp\\weights\\det.pt",
         "rec_model": "C:\\Users\\admin\\Desktop\\PythonOcr\\runs\\obb\\models\\rec_exp\\weights\\rec.pt",
+        "ctc_model": "C:\\Users\\admin\\Desktop\\PythonOcr\\models\\rec_ctc_exp\\weights\\best.pt",
         "vocab": "vocab_rec.txt",
     },
     "params": {
@@ -54,6 +55,7 @@ DEFAULT_CONFIG = {
         "rec_iou": 0.7,
         "det_imgsz": 640,
         "rec_imgsz": 320,
+        "rec_backend": "yolo",
         "use_gpu": False,
         "num_threads": 0,
         "sort_by": "x",
@@ -149,6 +151,17 @@ class OcrRecMainWindow(QMainWindow):
         rec_row.addWidget(self.rec_reset_btn)
         top_layout.addRow("识别模型", rec_row)
 
+        self.ctc_path_edit = QLineEdit()
+        self.ctc_browse_btn = QPushButton("CTC模型")
+        self.ctc_reset_btn = QPushButton("恢复默认")
+        self.ctc_browse_btn.clicked.connect(lambda: self._choose_model(self.ctc_path_edit))
+        self.ctc_reset_btn.clicked.connect(lambda: self._reset_path("ctc_model"))
+        ctc_row = QHBoxLayout()
+        ctc_row.addWidget(self.ctc_path_edit)
+        ctc_row.addWidget(self.ctc_browse_btn)
+        ctc_row.addWidget(self.ctc_reset_btn)
+        top_layout.addRow("CTC模型(可选)", ctc_row)
+
         export_box = QGroupBox("模型转换")
         export_layout = QFormLayout(export_box)
         self.export_key_edit = QLineEdit()
@@ -227,6 +240,10 @@ class OcrRecMainWindow(QMainWindow):
         self.rec_imgsz.setRange(64, 1024)
         self.rec_imgsz.setSingleStep(32)
 
+        self.rec_backend = QComboBox()
+        self.rec_backend.addItems(["yolo", "ctc"])
+        self.rec_backend.currentTextChanged.connect(self._update_rec_backend_ui)
+
         self.rec_auto_imgsz = QCheckBox("自动识别尺寸")
         self.rec_auto_imgsz.toggled.connect(self._update_rec_imgsz_ui)
 
@@ -292,6 +309,7 @@ class OcrRecMainWindow(QMainWindow):
 
         # 识别参数按优先级分成两列布局
         left_items = [
+            ("识别后端", self.rec_backend),
             ("识别阈值", self.rec_conf),
             ("识别 NMS", self.rec_iou),
             ("识别尺寸", self.rec_imgsz),
@@ -344,8 +362,16 @@ class OcrRecMainWindow(QMainWindow):
 
         preview_layout.addWidget(self.roi_preview)
         preview_layout.addLayout(roi_btn_row)
+
+        backend_hint_box = QGroupBox("当前后端生效参数说明")
+        backend_hint_layout = QVBoxLayout(backend_hint_box)
+        self.rec_backend_hint = QLabel()
+        self.rec_backend_hint.setWordWrap(True)
+        backend_hint_layout.addWidget(self.rec_backend_hint)
+
         param_layout.addWidget(det_box)
         param_layout.addWidget(rec_box)
+        param_layout.addWidget(backend_hint_box)
         param_layout.addWidget(self.reset_params_btn)
         param_layout.addWidget(preview_box)
 
@@ -365,10 +391,13 @@ class OcrRecMainWindow(QMainWindow):
         self.prev_btn = QPushButton("上一张")
         self.prev_btn.clicked.connect(self._run_prev)
         self.prev_btn.setVisible(False)
+        self.ab_compare_btn = QPushButton("A/B对比（YOLO vs CTC）")
+        self.ab_compare_btn.clicked.connect(self._run_ab_compare)
         self.save_cfg_btn = QPushButton("保存配置")
         self.save_cfg_btn.clicked.connect(self._save_config)
         btn_row.addWidget(self.run_btn)
         btn_row.addWidget(self.prev_btn)
+        btn_row.addWidget(self.ab_compare_btn)
         btn_row.addWidget(self.save_cfg_btn)
         btn_row.addStretch()
 
@@ -411,6 +440,7 @@ class OcrRecMainWindow(QMainWindow):
         self.image_path_edit.setText(paths.get("image", ""))
         self.det_path_edit.setText(paths.get("det_model", ""))
         self.rec_path_edit.setText(paths.get("rec_model", ""))
+        self.ctc_path_edit.setText(paths.get("ctc_model", ""))
         self.vocab_path_edit.setText(paths.get("vocab", ""))
 
         self.mode_combo.setCurrentText(ui.get("mode", "单张识别"))
@@ -422,6 +452,7 @@ class OcrRecMainWindow(QMainWindow):
         self.rec_iou.setValue(float(params.get("rec_iou", 0.7)))
         self.det_imgsz.setValue(int(params.get("det_imgsz", 640)))
         self.rec_imgsz.setValue(int(params.get("rec_imgsz", 320)))
+        self.rec_backend.setCurrentText(str(params.get("rec_backend", "yolo")))
         self.use_gpu.setChecked(bool(params.get("use_gpu", False)))
         self.num_threads.setValue(int(params.get("num_threads", 0)))
         self.sort_by.setCurrentText(params.get("sort_by", "x"))
@@ -443,6 +474,7 @@ class OcrRecMainWindow(QMainWindow):
         self.rec_imgsz_min.setValue(int(params.get("rec_imgsz_min", 160)))
         self.rec_imgsz_max.setValue(int(params.get("rec_imgsz_max", 640)))
         self._update_rec_imgsz_ui(self.rec_auto_imgsz.isChecked())
+        self._update_rec_backend_ui(self.rec_backend.currentText())
 
         image_path = self.image_path_edit.text().strip()
         if image_path and self._is_single_mode():
@@ -457,6 +489,7 @@ class OcrRecMainWindow(QMainWindow):
                 "image_dir": self.image_path_edit.text().strip() if self._is_multi_mode() else "",
                 "det_model": self.det_path_edit.text().strip(),
                 "rec_model": self.rec_path_edit.text().strip(),
+                "ctc_model": self.ctc_path_edit.text().strip(),
                 "vocab": self.vocab_path_edit.text().strip(),
             },
             "params": {
@@ -480,6 +513,8 @@ class OcrRecMainWindow(QMainWindow):
             self.det_path_edit.setText(paths.get("det_model", ""))
         elif key == "rec_model":
             self.rec_path_edit.setText(paths.get("rec_model", ""))
+        elif key == "ctc_model":
+            self.ctc_path_edit.setText(paths.get("ctc_model", ""))
         elif key == "image_dir":
             self.image_path_edit.setText(paths.get("image_dir", ""))
 
@@ -493,6 +528,7 @@ class OcrRecMainWindow(QMainWindow):
         self.rec_iou.setValue(float(params.get("rec_iou", 0.7)))
         self.det_imgsz.setValue(int(params.get("det_imgsz", 640)))
         self.rec_imgsz.setValue(int(params.get("rec_imgsz", 320)))
+        self.rec_backend.setCurrentText(str(params.get("rec_backend", "yolo")))
         self.use_gpu.setChecked(bool(params.get("use_gpu", False)))
         self.num_threads.setValue(int(params.get("num_threads", 0)))
         self.sort_by.setCurrentText(params.get("sort_by", "x"))
@@ -513,6 +549,7 @@ class OcrRecMainWindow(QMainWindow):
         self.rec_imgsz_min.setValue(int(params.get("rec_imgsz_min", 160)))
         self.rec_imgsz_max.setValue(int(params.get("rec_imgsz_max", 640)))
         self._update_rec_imgsz_ui(self.rec_auto_imgsz.isChecked())
+        self._update_rec_backend_ui(self.rec_backend.currentText())
 
     # 选择单张图片或多张文件夹
     def _choose_image(self) -> None:
@@ -585,6 +622,7 @@ class OcrRecMainWindow(QMainWindow):
             rec_iou=self.rec_iou.value(),
             det_imgsz=self.det_imgsz.value(),
             rec_imgsz=self.rec_imgsz.value(),
+            rec_backend=self.rec_backend.currentText().strip().lower(),
             use_gpu=self.use_gpu.isChecked(),
             num_threads=self.num_threads.value(),
             vocab_path=vocab_path,
@@ -695,7 +733,8 @@ class OcrRecMainWindow(QMainWindow):
                 self._log(f"图片不存在: {img_path}")
                 return
 
-        self._run_ocr_on_path(img_path, det_model, rec_model, params)
+        run_rec_model = self._resolve_rec_model_for_run(params, rec_model)
+        self._run_ocr_on_path(img_path, det_model, run_rec_model, params)
 
     # 在指定路径上执行推理并回显结果
     def _run_ocr_on_path(self, img_path: str, det_model: str, rec_model: str, params: OcrParams) -> None:
@@ -715,7 +754,8 @@ class OcrRecMainWindow(QMainWindow):
 
         roi_len_info = ",".join(str(v) for v in (params.roi_expected_lengths or ())) or "-"
         self._log(
-            "推理参数: det_conf={:.2f}, det_iou={:.2f}, det_max_det={}, rec_conf={:.2f}, rec_iou={:.2f}, det_imgsz={}, rec_imgsz={}, auto_imgsz={}, imgsz_min={}, imgsz_max={}, topN={}, min_score={:.2f}, min_box={}, row_thresh={:.2f}, roi_len={}, pad_ratio={:.2f}, pad_px={}, flip={}, flip_min_score={:.2f}, device={}".format(
+            "推理参数: rec_backend={}, det_conf={:.2f}, det_iou={:.2f}, det_max_det={}, rec_conf={:.2f}, rec_iou={:.2f}, det_imgsz={}, rec_imgsz={}, auto_imgsz={}, imgsz_min={}, imgsz_max={}, topN={}, min_score={:.2f}, min_box={}, row_thresh={:.2f}, roi_len={}, pad_ratio={:.2f}, pad_px={}, flip={}, flip_min_score={:.2f}, device={}".format(
+                params.rec_backend,
                 params.det_conf,
                 params.det_iou,
                 params.det_max_det,
@@ -771,13 +811,14 @@ class OcrRecMainWindow(QMainWindow):
             return
         self._load_image(str(prev_img))
         self._update_stats()
-        self._run_ocr_on_path(str(prev_img), self.det_path_edit.text().strip(), self.rec_path_edit.text().strip(), self._collect_params())
+        params = self._collect_params()
+        run_rec_model = self._resolve_rec_model_for_run(params, self.rec_path_edit.text().strip())
+        self._run_ocr_on_path(str(prev_img), self.det_path_edit.text().strip(), run_rec_model, params)
 
     # 将识别结果绘制到画布
     def _draw_result(self, result: OcrResult) -> None:
         if self._pixmap_item is None:
             return
-        # keep image, remove previous overlays
         for item in list(self._scene.items()):
             if item is self._pixmap_item:
                 continue
@@ -833,7 +874,6 @@ class OcrRecMainWindow(QMainWindow):
         self._roi_index = 0
         self._update_roi_preview()
 
-
     # 更新 ROI 预览
     def _update_roi_preview(self) -> None:
         if not self._roi_list:
@@ -848,48 +888,175 @@ class OcrRecMainWindow(QMainWindow):
             self.roi_preview.setText("无")
             self.roi_preview.setPixmap(QPixmap())
             return
-        rgb = roi[:, :, ::-1]
-        rgb = np.ascontiguousarray(rgb)
+        rgb = np.ascontiguousarray(roi[:, :, ::-1])
         image = QImage(rgb.data, w, h, w * 3, QImage.Format.Format_RGB888).copy()
         self.roi_preview.setPixmap(
             QPixmap.fromImage(image).scaled(self.roi_preview.size(), Qt.AspectRatioMode.KeepAspectRatio)
         )
         self._log(f"ROI 预览: {self._roi_index + 1}/{len(self._roi_list)}")
 
-    # 上一张 ROI
     def _roi_prev(self) -> None:
         if not self._roi_list:
             return
         self._roi_index = max(0, self._roi_index - 1)
         self._update_roi_preview()
 
-    # 下一张 ROI
     def _roi_next(self) -> None:
         if not self._roi_list:
             return
         self._roi_index = min(len(self._roi_list) - 1, self._roi_index + 1)
         self._update_roi_preview()
 
-    # 判断是否为多张模式
     def _is_multi_mode(self) -> bool:
         return self.mode_combo.currentText() == "多张识别"
 
-    # 判断是否为单张模式
     def _is_single_mode(self) -> bool:
         return self.mode_combo.currentText() == "单张识别"
 
-    # 切换识别尺寸控件状态
     def _update_rec_imgsz_ui(self, enabled: bool) -> None:
         self.rec_imgsz.setEnabled(not enabled)
         self.rec_imgsz_min.setVisible(enabled)
         self.rec_imgsz_max.setVisible(enabled)
-        # 同步标签可见性（同一行的 QLabel）
         for label in self.findChildren(QLabel):
             text = label.text()
             if text == "识别最小尺寸":
                 label.setVisible(enabled)
             elif text == "识别最大尺寸":
                 label.setVisible(enabled)
+
+    def _update_rec_backend_ui(self, backend: str) -> None:
+        is_ctc = str(backend).strip().lower() == "ctc"
+        self.rec_iou.setEnabled(not is_ctc)
+        self.rec_top_n.setEnabled(not is_ctc)
+        self.rec_min_box.setEnabled(not is_ctc)
+        self.rec_row_thresh.setEnabled(not is_ctc)
+        self.rec_backend_hint.setText(self._backend_effective_params_text("ctc" if is_ctc else "yolo"))
+
+    def _backend_effective_params_text(self, backend: str) -> str:
+        b = str(backend).strip().lower()
+        if b == "ctc":
+            return (
+                "后端：CTC\n"
+                "生效参数：rec_backend, rec_imgsz, rec_flip_enable, roi_expected_lengths, det_*（定位相关）\n"
+                "说明：CTC 不使用 rec_iou / rec_top_n / rec_min_box / rec_row_thresh。"
+            )
+        return (
+            "后端：YOLO\n"
+            "生效参数：rec_backend, rec_conf, rec_iou, rec_top_n, rec_min_score, rec_min_box, "
+            "rec_row_thresh, rec_auto_imgsz, rec_imgsz(_min/_max), rec_flip_enable, roi_expected_lengths, det_*。"
+        )
+
+    def _resolve_ctc_model_for_ab(self, rec_model: str) -> str:
+        manual = self.ctc_path_edit.text().strip()
+        if manual and Path(manual).exists():
+            return manual
+
+        p = Path(rec_model)
+        stem_low = p.stem.lower()
+        name_low = p.name.lower()
+        if "ctc" in stem_low or "ctc" in name_low:
+            return rec_model
+
+        candidates = [
+            Path("models/rec_ctc_exp/weights/best.pt")
+        ]
+        for c in candidates:
+            if c.exists():
+                return str(c)
+        return rec_model
+
+    def _resolve_rec_model_for_run(self, params: OcrParams, rec_model: str) -> str:
+        if str(params.rec_backend).strip().lower() != "ctc":
+            return rec_model
+        ctc_model = self._resolve_ctc_model_for_ab(rec_model)
+        if ctc_model != rec_model:
+            self._log(f"CTC后端提示：自动使用 CTC 权重 {ctc_model}")
+        return ctc_model
+
+    def _run_ab_compare(self) -> None:
+        if self._is_multi_mode():
+            self._log("A/B 对比仅支持单张识别，请切换到单张模式")
+            return
+
+        img_path = self.image_path_edit.text().strip()
+        det_model = self.det_path_edit.text().strip()
+        rec_model = self.rec_path_edit.text().strip()
+        if not img_path:
+            self._log("请先选择图片")
+            return
+        if not Path(img_path).exists():
+            self._log(f"图片不存在: {img_path}")
+            return
+
+        params = self._collect_params()
+        if not params.mock_mode:
+            if not det_model or not rec_model:
+                self._log("请先选择定位模型与识别模型")
+                return
+            if not Path(det_model).exists():
+                self._log(f"定位模型不存在: {det_model}")
+                return
+            if not Path(rec_model).exists():
+                self._log(f"识别模型不存在: {rec_model}")
+                return
+
+        ctc_model = self._resolve_ctc_model_for_ab(rec_model)
+        if ctc_model != rec_model:
+            self._log(f"A/B 提示：CTC 分支自动使用权重 {ctc_model}")
+
+        self._log("开始 A/B 对比：YOLO vs CTC")
+        yolo_params = replace(params, rec_backend="yolo")
+        ctc_params = replace(params, rec_backend="ctc")
+
+        yolo_res: OcrResult | None = None
+        ctc_res: OcrResult | None = None
+
+        try:
+            yolo_res = run_ocr(Path(img_path), Path(det_model), Path(rec_model), yolo_params)
+        except Exception as exc:
+            self._log(f"YOLO 对比失败: {exc}")
+
+        try:
+            ctc_res = run_ocr(Path(img_path), Path(det_model), Path(ctc_model), ctc_params)
+        except Exception as exc:
+            self._log(f"CTC 对比失败: {exc}")
+
+        if not yolo_res and not ctc_res:
+            self._log("A/B 对比失败：两侧都未得到结果")
+            return
+
+        def _sum_line(name: str, r: OcrResult | None) -> str:
+            if r is None:
+                return f"{name}=失败"
+            return (
+                f"{name}: total={r.total_time_ms:.1f}ms det={r.det_time_ms:.1f}ms rec={r.rec_time_ms:.1f}ms "
+                f"boxes={len(r.boxes)} mean={r.mean_score:.3f}"
+            )
+
+        self._log("A/B总览 | " + _sum_line("YOLO", yolo_res) + " || " + _sum_line("CTC", ctc_res))
+
+        def _roi_map(r: OcrResult | None) -> dict[int, tuple[str, float]]:
+            out: dict[int, tuple[str, float]] = {}
+            if r is None:
+                return out
+            for i, b in enumerate(r.boxes, start=1):
+                idx = int(b.roi_index) if b.roi_index is not None else i
+                out[idx] = (b.text, float(b.score))
+            return out
+
+        ym = _roi_map(yolo_res)
+        cm = _roi_map(ctc_res)
+        for idx in sorted(set(ym.keys()) | set(cm.keys())):
+            yt, ys = ym.get(idx, ("-", 0.0))
+            ct, cs = cm.get(idx, ("-", 0.0))
+            self._log(f"ROI{idx} | YOLO: {yt} ({ys:.2f}) || CTC: {ct} ({cs:.2f})")
+
+        sel = self.rec_backend.currentText().strip().lower()
+        draw_res = ctc_res if sel == "ctc" else yolo_res
+        if draw_res is None:
+            draw_res = yolo_res or ctc_res
+        if draw_res is not None:
+            self._draw_result(draw_res)
 
     def _parse_roi_expected_lengths(self) -> tuple[int, ...] | None:
         raw = self.roi_expected_len.text().strip()
@@ -913,6 +1080,7 @@ class OcrRecMainWindow(QMainWindow):
     def _export_and_encrypt(self) -> None:
         det_path = self.det_path_edit.text().strip()
         rec_path = self.rec_path_edit.text().strip()
+        ctc_path = self.ctc_path_edit.text().strip()
         if not det_path or not rec_path:
             self._log("请先选择定位模型与识别模型")
             return
@@ -922,7 +1090,7 @@ class OcrRecMainWindow(QMainWindow):
             self._log("加密KEY不能为空")
             return
 
-        self._log("导出参数: det_nms=ON, rec_nms=OFF")
+        self._log("导出参数: det_nms=ON, rec_nms=ON, det_dynamic=OFF, rec_dynamic=OFF")
 
         try:
             det_res = export_and_encrypt(
@@ -933,6 +1101,7 @@ class OcrRecMainWindow(QMainWindow):
                 onnx_name="det.onnx",
                 enc_name="det.onnx.enc",
                 nms=True,
+                dynamic=False,
             )
             rec_res = export_and_encrypt(
                 Path(rec_path),
@@ -942,7 +1111,30 @@ class OcrRecMainWindow(QMainWindow):
                 onnx_name="rec.onnx",
                 enc_name="rec.onnx.enc",
                 nms=True,
+                dynamic=False,
             )
+
+            ctc_res = None
+            if ctc_path and Path(ctc_path).exists():
+                try:
+                    # CTC 为序列识别模型，导出时无需 NMS。
+                    ctc_res = export_and_encrypt(
+                        Path(ctc_path),
+                        int(self.rec_imgsz.value()),
+                        out_dir,
+                        key,
+                        onnx_name="rec_ctc.onnx",
+                        enc_name="rec_ctc.onnx.enc",
+                        nms=False,
+                        dynamic=False,
+                    )
+                except Exception as ctc_exc:
+                    # CTC 导出失败不影响 det/rec 导出结果。
+                    self._log(f"CTC模型导出失败（已跳过，不影响det/rec）: {ctc_exc}")
+            elif ctc_path:
+                self._log(f"CTC模型不存在，跳过导出: {ctc_path}")
+            else:
+                self._log("未配置 CTC模型(可选)，跳过 rec_ctc 导出")
         except Exception as exc:
             self._log(f"导出失败: {exc}")
             return
@@ -951,24 +1143,53 @@ class OcrRecMainWindow(QMainWindow):
         max_delta = 84
         det_delta = det_res.bytes_out - det_res.bytes_in
         rec_delta = rec_res.bytes_out - rec_res.bytes_in
-        self._log(f"det.onnx.enc 比 det.onnx 大 {det_delta} bytes")
-        self._log(f"rec.onnx.enc 比 rec.onnx 大 {rec_delta} bytes")
+        ctc_delta = (ctc_res.bytes_out - ctc_res.bytes_in) if ctc_res is not None else None
+        self._log(
+            f"det.onnx={det_res.bytes_in} bytes, det.onnx.enc={det_res.bytes_out} bytes, "
+            f"差值 {det_delta} bytes（期望 {min_delta}~{max_delta}）"
+        )
+        self._log(
+            f"rec.onnx={rec_res.bytes_in} bytes, rec.onnx.enc={rec_res.bytes_out} bytes, "
+            f"差值 {rec_delta} bytes（期望 {min_delta}~{max_delta}）"
+        )
+        if ctc_res is not None and ctc_delta is not None:
+            self._log(
+                f"rec_ctc.onnx={ctc_res.bytes_in} bytes, rec_ctc.onnx.enc={ctc_res.bytes_out} bytes, "
+                f"差值 {ctc_delta} bytes（期望 {min_delta}~{max_delta}）"
+            )
 
         def _delta_ok(delta: int) -> bool:
             return min_delta <= delta <= max_delta
 
-        if not _delta_ok(det_delta) or not _delta_ok(rec_delta):
-            self._log(f"加密文件大小异常：差值不在 {min_delta}~{max_delta} bytes 范围内")
-            QMessageBox.warning(self, "加密校验失败", "加密文件大小异常，请检查导出/加密流程。")
+        det_ok = _delta_ok(det_delta)
+        rec_ok = _delta_ok(rec_delta)
+        ctc_ok = _delta_ok(ctc_delta) if ctc_delta is not None else True
+        if not det_ok or not rec_ok or not ctc_ok:
+            bad = []
+            if not det_ok:
+                bad.append(f"det 差值 {det_delta}")
+            if not rec_ok:
+                bad.append(f"rec 差值 {rec_delta}")
+            if not ctc_ok and ctc_delta is not None:
+                bad.append(f"rec_ctc 差值 {ctc_delta}")
+            msg = (
+                f"加密文件大小异常：{', '.join(bad)} 不在 {min_delta}~{max_delta} bytes 范围内，"
+                "加密文件可能损坏或加密流程被篡改。"
+            )
+            self._log(msg)
+            QMessageBox.warning(self, "加密校验失败", msg)
             return
+        self._log(f"加密大小校验通过：差值均在 {min_delta}~{max_delta} bytes 范围内")
 
         self._log(f"定位模型导出: {det_res.onnx_path}")
         self._log(f"定位模型加密: {det_res.enc_path}")
         self._log(f"识别模型导出: {rec_res.onnx_path}")
         self._log(f"识别模型加密: {rec_res.enc_path}")
+        if ctc_res is not None:
+            self._log(f"CTC识别模型导出: {ctc_res.onnx_path}")
+            self._log(f"CTC识别模型加密: {ctc_res.enc_path}")
         QMessageBox.information(self, "导出完成", "模型导出并加密成功，已保存到 models 目录。")
 
-    # 验证加密模型是否可正确解密并与 ONNX 一致
     def _validate_encrypted_models(self) -> None:
         out_dir = Path("models")
         key = self.export_key_edit.text().strip()
@@ -976,10 +1197,12 @@ class OcrRecMainWindow(QMainWindow):
             self._log("加密KEY不能为空")
             return
 
-        det_onnx = out_dir / "det_best.onnx"
-        rec_onnx = out_dir / "rec_best.onnx"
-        det_enc = out_dir / "det_best.onnx.enc"
-        rec_enc = out_dir / "rec_best.onnx.enc"
+        det_onnx = out_dir / "det.onnx"
+        rec_onnx = out_dir / "rec.onnx"
+        det_enc = out_dir / "det.onnx.enc"
+        rec_enc = out_dir / "rec.onnx.enc"
+        rec_ctc_onnx = out_dir / "rec_ctc.onnx"
+        rec_ctc_enc = out_dir / "rec_ctc.onnx.enc"
 
         det_res = validate_encrypted_model(det_enc, key, det_onnx)
         rec_res = validate_encrypted_model(rec_enc, key, rec_onnx)
@@ -991,7 +1214,15 @@ class OcrRecMainWindow(QMainWindow):
         if rec_res.ok:
             self._log(f"识别模型解密大小: {rec_res.bytes_dec} bytes")
 
-        if det_res.ok and rec_res.ok:
+        ctc_optional_ok = True
+        if rec_ctc_enc.exists() or rec_ctc_onnx.exists():
+            ctc_res = validate_encrypted_model(rec_ctc_enc, key, rec_ctc_onnx)
+            self._log(f"验证CTC识别模型: {ctc_res.message}")
+            if ctc_res.ok:
+                self._log(f"CTC识别模型解密大小: {ctc_res.bytes_dec} bytes")
+            ctc_optional_ok = ctc_res.ok
+
+        if det_res.ok and rec_res.ok and ctc_optional_ok:
             QMessageBox.information(self, "验证通过", "加密模型验证通过，可用于解码。")
         else:
             QMessageBox.warning(self, "验证失败", "加密模型验证失败，请查看日志。")

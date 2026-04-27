@@ -32,6 +32,7 @@ python -m qt_app.ocr_rec_app.onnx_views.main
 
 ## 参数说明
 
+- rec_backend：识别后端（`yolo` 或 `ctc`）
 - det_conf：定位置信度阈值
 - det_iou：定位 NMS 阈值
 - rec_conf：识别置信度阈值
@@ -42,6 +43,31 @@ python -m qt_app.ocr_rec_app.onnx_views.main
 - vocab：字符集文件（UTF-8，每行一个字符）
 - sort_by：输出排序方式（x 或 y）
 - mock_mode：启用 mock 模式，仅用于验证 UI 绘制
+
+### 后端切换说明
+
+- `yolo`：沿用当前“检测+类别”识别模型（兼容现有参数）
+- `ctc`：使用 CRNN+CTC 识别模型（`rec_model` 建议选择 `train-rec-ctc` 产出的 `best.pt`）
+- 两个后端共用同一套定位模型与 ROI 可视化流程
+- 界面会根据 `rec_backend` 动态显示“当前后端生效参数说明”，帮助避免无效参数配置
+- 在“文件与模型选择”区域可单独设置 `CTC模型(可选)`：
+  - 当 `rec_backend=ctc` 时，优先使用该模型
+  - 若未设置，会回退到自动探测路径
+- 顶部“文件与模型选择”新增 `CTC模型(可选)` 输入框：
+  - 当 `rec_backend=ctc` 时，优先使用该路径
+  - A/B 对比时，CTC 分支也优先使用该路径
+
+### A/B 一键对比
+
+- 点击 `A/B对比（YOLO vs CTC）` 按钮，可在同一张图上连续执行两次推理
+- 日志会输出并排对比信息：
+  - 总耗时 / det耗时 / rec耗时 / 框数量 / 平均分数
+  - 每个 ROI 的 `YOLO识别结果 vs CTC识别结果`
+- 目前 A/B 对比仅支持“单张识别”模式
+- A/B 对比中：YOLO 分支使用“识别模型”；CTC 分支优先使用 `CTC模型(可选)`。
+  若未设置，则自动尝试 `models/rec_ctc_exp/weights/best.pt`。
+- A/B 对比中：YOLO 分支使用当前“识别模型”路径；CTC 分支优先使用 `CTC模型(可选)` 路径。
+  若未设置，则回退到自动探测（`models/rec_ctc_exp/weights/best.pt` 等）
 
 ## 模型转换与加密
 - 在界面“模型转换”区域填写加密 KEY，点击“导出&加密”。

@@ -22,6 +22,9 @@ namespace Ssharp_Ocr_Wpf.ViewModels
         private double _imagePixelWidth;
         private double _imagePixelHeight;
         private string _logText;
+        private string _detModelPath = AppDomain.CurrentDomain.BaseDirectory + "onnx\\det.onnx.enc";
+        private string _recModelPath = AppDomain.CurrentDomain.BaseDirectory + "onnx\\rec.onnx.enc";
+        private string _ctcModelPath = AppDomain.CurrentDomain.BaseDirectory + "onnx\\rec_ctc.onnx.enc";
         private readonly List<BitmapImage> _roiPreviews = new List<BitmapImage>();
         private int _roiPreviewIndex = -1;
         private BitmapImage _currentRoiPreview;
@@ -34,6 +37,9 @@ namespace Ssharp_Ocr_Wpf.ViewModels
             RecBoxes = new ObservableCollection<DisplayBox>();
 
             BrowseFolderCommand = new RelayCommand(BrowseFolder);
+            BrowseDetModelCommand = new RelayCommand(BrowseDetModelFile);
+            BrowseRecModelCommand = new RelayCommand(BrowseRecModelFile);
+            BrowseCtcModelCommand = new RelayCommand(BrowseCtcModelFile);
             PrevCommand = new RelayCommand(PrevImage, CanGoPrev);
             NextCommand = new RelayCommand(NextImage, CanGoNext);
             PrevRoiCommand = new RelayCommand(PrevRoi, CanGoPrevRoi);
@@ -60,6 +66,12 @@ namespace Ssharp_Ocr_Wpf.ViewModels
 
         public RelayCommand BrowseFolderCommand { get; }
 
+        public RelayCommand BrowseDetModelCommand { get; }
+
+        public RelayCommand BrowseRecModelCommand { get; }
+
+        public RelayCommand BrowseCtcModelCommand { get; }
+
         public RelayCommand PrevCommand { get; }
 
         public RelayCommand NextCommand { get; }
@@ -68,9 +80,35 @@ namespace Ssharp_Ocr_Wpf.ViewModels
 
         public RelayCommand NextRoiCommand { get; }
 
-        public string DetModelPath { get; set; }=AppDomain.CurrentDomain.BaseDirectory + "onnx\\det.onnx.enc";
+        public string DetModelPath
+        {
+            get => _detModelPath;
+            set
+            {
+                _detModelPath = value;
+                OnPropertyChanged();
+            }
+        }
 
-        public string RecModelPath { get; set; }=AppDomain.CurrentDomain.BaseDirectory + "onnx\\rec.onnx.enc";
+        public string RecModelPath
+        {
+            get => _recModelPath;
+            set
+            {
+                _recModelPath = value;
+                OnPropertyChanged();
+            }
+        }
+
+        public string CtcModelPath
+        {
+            get => _ctcModelPath;
+            set
+            {
+                _ctcModelPath = value;
+                OnPropertyChanged();
+            }
+        }
 
         public string Passphrase { get; set; } = "PG&shuyun@568.com";
 
@@ -162,6 +200,64 @@ namespace Ssharp_Ocr_Wpf.ViewModels
             }
         }
 
+        private void BrowseDetModelFile()
+        {
+            var selectedPath = BrowseModelFile("选择检测模型文件", DetModelPath);
+            if (!string.IsNullOrWhiteSpace(selectedPath))
+            {
+                DetModelPath = selectedPath;
+            }
+        }
+
+        private void BrowseRecModelFile()
+        {
+            var selectedPath = BrowseModelFile("选择识别模型文件", RecModelPath);
+            if (!string.IsNullOrWhiteSpace(selectedPath))
+            {
+                RecModelPath = selectedPath;
+            }
+        }
+
+        private void BrowseCtcModelFile()
+        {
+            var selectedPath = BrowseModelFile("选择CTC模型文件", CtcModelPath);
+            if (!string.IsNullOrWhiteSpace(selectedPath))
+            {
+                CtcModelPath = selectedPath;
+            }
+        }
+
+        private static string BrowseModelFile(string title, string currentPath)
+        {
+            var dialog = new OpenFileDialog
+            {
+                Title = title,
+                CheckFileExists = true,
+                Multiselect = false,
+                Filter = "ONNX模型|*.onnx;*.enc|所有文件|*.*"
+            };
+
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(currentPath))
+                {
+                    var initialDir = Path.GetDirectoryName(currentPath);
+                    if (!string.IsNullOrWhiteSpace(initialDir) && Directory.Exists(initialDir))
+                    {
+                        dialog.InitialDirectory = initialDir;
+                    }
+
+                    dialog.FileName = Path.GetFileName(currentPath);
+                }
+            }
+            catch
+            {
+                // Ignore invalid pre-filled path and keep default dialog location.
+            }
+
+            return dialog.ShowDialog() == true ? dialog.FileName : string.Empty;
+        }
+
         private void LoadImages(string folderPath)
         {
             var files = Directory.EnumerateFiles(folderPath)
@@ -249,7 +345,8 @@ namespace Ssharp_Ocr_Wpf.ViewModels
 
         private void RecognizeCurrent(string imagePath)
         {
-            if (string.IsNullOrWhiteSpace(DetModelPath) || string.IsNullOrWhiteSpace(RecModelPath))
+            var recModelPath = ResolveRecModelPath();
+            if (string.IsNullOrWhiteSpace(DetModelPath) || string.IsNullOrWhiteSpace(recModelPath))
             {
                 AddLog("请先配置检测模型和识别模型路径。");
                 return;
@@ -259,8 +356,9 @@ namespace Ssharp_Ocr_Wpf.ViewModels
             {
                 AddLog(string.Format("开始识别: {0}", Path.GetFileName(imagePath)));
                 var options = Options.ToOptions(AddLog);
+                AddLog(string.Format("识别后端: {0}", options.RecBackend));
 
-                using (var runner = new OcrRunner(DetModelPath, RecModelPath, Passphrase ?? string.Empty, options))
+                using (var runner = new OcrRunner(DetModelPath, recModelPath, Passphrase ?? string.Empty, options))
                 {
                     var result = runner.Run(imagePath);
                     Boxes.Clear();
@@ -346,6 +444,22 @@ namespace Ssharp_Ocr_Wpf.ViewModels
             {
                 AddLog(string.Format("识别失败: {0}", ex.Message));
             }
+        }
+
+        private string ResolveRecModelPath()
+        {
+            if (Options.RecBackend == RecBackend.Ctc)
+            {
+                if (!string.IsNullOrWhiteSpace(CtcModelPath))
+                {
+                    return CtcModelPath;
+                }
+
+                // 兼容旧配置：未单独配置 CTC 时回退到识别模型路径。
+                return RecModelPath;
+            }
+
+            return RecModelPath;
         }
 
         private void UpdateProgress()

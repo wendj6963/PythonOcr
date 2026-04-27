@@ -8,6 +8,8 @@ src/pyocr/label_check.py
 src/pyocr/label_tool.py
 src/pyocr/paths.py
 src/pyocr/pipeline.py
+src/pyocr/rec_ctc_backend.py
+src/pyocr/rec_ctc_prep.py
 src/pyocr/yolo_backend.py
 src/pythonocr.egg-info/PKG-INFO
 src/pythonocr.egg-info/SOURCES.txt

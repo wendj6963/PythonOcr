@@ -22,6 +22,7 @@ class OcrParams:
     rec_iou: float = 0.7
     det_imgsz: int = 640
     rec_imgsz: int = 320
+    rec_backend: str = "yolo"
     use_gpu: bool = False
     num_threads: int = 0
     vocab_path: Path | None = None
@@ -325,6 +326,123 @@ def _expected_len_for_roi(params: OcrParams, roi_index: int) -> int | None:
     return val if val > 0 else None
 
 
+def _infer_roi_text_yolo(
+    roi: np.ndarray,
+    rec_model: Path,
+    device: str,
+    params: OcrParams,
+    vocab_map: dict[int, str],
+    expected_len: int | None,
+    min_score: float,
+    flip_min_score: float,
+) -> tuple[str, float]:
+    rec_imgsz = _choose_rec_imgsz(roi, params)
+    rec_pred = predict(
+        rec_model,
+        image=roi,
+        imgsz=rec_imgsz,
+        device=device,
+        conf=params.rec_conf,
+        iou=params.rec_iou,
+    )
+    rec_boxes = _extract_boxes(rec_pred)
+    if not rec_boxes:
+        rec_boxes = _extract_boxes_fallback(rec_pred, max(1, roi.shape[1]), max(1, roi.shape[0]))
+
+    per_top_n = int(expected_len) if expected_len is not None else int(params.rec_top_n)
+    rec_boxes = _filter_rec_boxes(
+        rec_boxes,
+        params.sort_by,
+        min_score,
+        per_top_n,
+        params.rec_min_box,
+        params.rec_row_thresh,
+    )
+    text_parts, scores = _rec_text_from_boxes(rec_boxes, vocab_map)
+
+    if expected_len is not None and len(text_parts) > expected_len:
+        text_parts = text_parts[:expected_len]
+        scores = scores[:expected_len]
+
+    if params.rec_flip_enable:
+        roi_flip = np.ascontiguousarray(np.flip(roi, (0, 1)))
+        rec_imgsz_flip = _choose_rec_imgsz(roi_flip, params)
+        rec_pred_flip = predict(
+            rec_model,
+            image=roi_flip,
+            imgsz=rec_imgsz_flip,
+            device=device,
+            conf=params.rec_conf,
+            iou=params.rec_iou,
+        )
+        flip_boxes = _extract_boxes(rec_pred_flip)
+        if not flip_boxes:
+            flip_boxes = _extract_boxes_fallback(rec_pred_flip, max(1, roi_flip.shape[1]), max(1, roi_flip.shape[0]))
+        flip_boxes = _filter_rec_boxes(
+            flip_boxes,
+            params.sort_by,
+            flip_min_score,
+            per_top_n,
+            params.rec_min_box,
+            params.rec_row_thresh,
+        )
+        flip_text, flip_scores = _rec_text_from_boxes(flip_boxes, vocab_map)
+        if expected_len is not None and len(flip_text) > expected_len:
+            flip_text = flip_text[:expected_len]
+            flip_scores = flip_scores[:expected_len]
+
+        base_mean = float(np.mean(scores)) if scores else 0.0
+        flip_mean = float(np.mean(flip_scores)) if flip_scores else 0.0
+        if flip_mean > base_mean and flip_text:
+            text_parts = flip_text
+            scores = flip_scores
+
+    text = "".join(text_parts)
+    score = float(np.mean(scores)) if scores else 0.0
+    return text, score
+
+
+def _infer_roi_text_ctc(
+    roi: np.ndarray,
+    rec_model: Path,
+    device: str,
+    params: OcrParams,
+    expected_len: int | None,
+) -> tuple[str, float]:
+    from src.pyocr import rec_ctc_backend
+
+    rec = rec_ctc_backend.infer_ctc_array(
+        weights=rec_model,
+        image_bgr=roi,
+        img_h=48,
+        img_w=max(64, int(params.rec_imgsz)),
+        device=device,
+    )
+    text = str(rec.get("text", ""))
+    score = float(rec.get("score", 0.0))
+
+    if expected_len is not None and len(text) > expected_len:
+        text = text[:expected_len]
+
+    if params.rec_flip_enable:
+        roi_flip = np.ascontiguousarray(np.flip(roi, (0, 1)))
+        rec_flip = rec_ctc_backend.infer_ctc_array(
+            weights=rec_model,
+            image_bgr=roi_flip,
+            img_h=48,
+            img_w=max(64, int(params.rec_imgsz)),
+            device=device,
+        )
+        flip_text = str(rec_flip.get("text", ""))
+        if expected_len is not None and len(flip_text) > expected_len:
+            flip_text = flip_text[:expected_len]
+        flip_score = float(rec_flip.get("score", 0.0))
+        if flip_score > score:
+            text, score = flip_text, flip_score
+
+    return text, score
+
+
 # 入口：执行 det + rec 推理，返回可视化结果结构
 def run_ocr(image: Path, det_model: Path, rec_model: Path, params: OcrParams) -> OcrResult:
     _apply_threads(params.num_threads)
@@ -369,6 +487,7 @@ def run_ocr(image: Path, det_model: Path, rec_model: Path, params: OcrParams) ->
 
     min_score = max(params.rec_conf, params.rec_min_score)
     flip_min_score = max(params.rec_conf, params.rec_flip_min_score)
+    rec_backend = str(params.rec_backend or "yolo").strip().lower()
 
     if det_polys:
         det_polys = _sort_polys(det_polys, params.sort_by, params.rec_row_thresh)
@@ -392,71 +511,20 @@ def run_ocr(image: Path, det_model: Path, rec_model: Path, params: OcrParams) ->
                 roi = _warp_quad(img, quad_roi)
             roi_previews.append(roi)
 
-            rec_imgsz = _choose_rec_imgsz(roi, params)
-            rec_pred = predict(
-                rec_model,
-                image=roi,
-                imgsz=rec_imgsz,
-                device=device,
-                conf=params.rec_conf,
-                iou=params.rec_iou,
-            )
-            rec_boxes = _extract_boxes(rec_pred)
-            if not rec_boxes:
-                rec_boxes = _extract_boxes_fallback(rec_pred, max(1, roi.shape[1]), max(1, roi.shape[0]))
             expected_len = _expected_len_for_roi(params, roi_idx)
-            per_top_n = int(expected_len) if expected_len is not None else int(params.rec_top_n)
-            rec_boxes = _filter_rec_boxes(
-                rec_boxes,
-                params.sort_by,
-                min_score,
-                per_top_n,
-                params.rec_min_box,
-                params.rec_row_thresh,
-            )
-            text_parts, scores = _rec_text_from_boxes(rec_boxes, vocab_map)
-
-            if expected_len is not None and len(text_parts) > expected_len:
-                text_parts = text_parts[:expected_len]
-                scores = scores[:expected_len]
-
-            if params.rec_flip_enable:
-                roi_flip = np.ascontiguousarray(np.flip(roi, (0, 1)))
-                rec_imgsz_flip = _choose_rec_imgsz(roi_flip, params)
-                rec_pred_flip = predict(
+            if rec_backend == "ctc":
+                text, score = _infer_roi_text_ctc(roi, rec_model, device, params, expected_len)
+            else:
+                text, score = _infer_roi_text_yolo(
+                    roi,
                     rec_model,
-                    image=roi_flip,
-                    imgsz=rec_imgsz_flip,
-                    device=device,
-                    conf=params.rec_conf,
-                    iou=params.rec_iou,
-                )
-                flip_boxes = _extract_boxes(rec_pred_flip)
-                if not flip_boxes:
-                    flip_boxes = _extract_boxes_fallback(
-                        rec_pred_flip, max(1, roi_flip.shape[1]), max(1, roi_flip.shape[0])
-                    )
-                flip_boxes = _filter_rec_boxes(
-                    flip_boxes,
-                    params.sort_by,
+                    device,
+                    params,
+                    vocab_map,
+                    expected_len,
+                    min_score,
                     flip_min_score,
-                    per_top_n,
-                    params.rec_min_box,
-                    params.rec_row_thresh,
                 )
-                flip_text, flip_scores = _rec_text_from_boxes(flip_boxes, vocab_map)
-                if expected_len is not None and len(flip_text) > expected_len:
-                    flip_text = flip_text[:expected_len]
-                    flip_scores = flip_scores[:expected_len]
-                # ...existing code...
-                base_mean = float(np.mean(scores)) if scores else 0.0
-                flip_mean = float(np.mean(flip_scores)) if flip_scores else 0.0
-                if flip_mean > base_mean and flip_text:
-                    text_parts = flip_text
-                    scores = flip_scores
-
-            text = "".join(text_parts)
-            score = float(np.mean(scores)) if scores else 0.0
             out_boxes.append(
                 OcrBox(
                     float(x1),
@@ -482,66 +550,20 @@ def run_ocr(image: Path, det_model: Path, rec_model: Path, params: OcrParams) ->
             x1, y1, x2, y2 = _pad_axis_roi(x1, y1, x2, y2, w, h, params.roi_pad_ratio, params.roi_pad_px)
             roi = img[y1:y2, x1:x2]
             roi_previews.append(roi)
-            rec_imgsz = _choose_rec_imgsz(roi, params)
-            rec_pred = predict(
-                rec_model,
-                image=roi,
-                imgsz=rec_imgsz,
-                device=device,
-                conf=params.rec_conf,
-                iou=params.rec_iou,
-            )
-            rec_boxes = _extract_boxes(rec_pred)
-            if not rec_boxes:
-                rec_boxes = _extract_boxes_fallback(rec_pred, max(1, roi.shape[1]), max(1, roi.shape[0]))
             expected_len = _expected_len_for_roi(params, roi_idx)
-            per_top_n = int(expected_len) if expected_len is not None else int(params.rec_top_n)
-            rec_boxes = _filter_rec_boxes(
-                rec_boxes,
-                params.sort_by,
-                min_score,
-                per_top_n,
-                params.rec_min_box,
-                params.rec_row_thresh,
-            )
-            text_parts, scores = _rec_text_from_boxes(rec_boxes, vocab_map)
-
-            if expected_len is not None and len(text_parts) > expected_len:
-                text_parts = text_parts[:expected_len]
-                scores = scores[:expected_len]
-
-            if params.rec_flip_enable:
-                roi_flip = np.ascontiguousarray(np.flip(roi, (0, 1)))
-                rec_imgsz_flip = _choose_rec_imgsz(roi_flip, params)
-                rec_pred_flip = predict(
+            if rec_backend == "ctc":
+                text, score = _infer_roi_text_ctc(roi, rec_model, device, params, expected_len)
+            else:
+                text, score = _infer_roi_text_yolo(
+                    roi,
                     rec_model,
-                    image=roi_flip,
-                    imgsz=rec_imgsz_flip,
-                    device=device,
-                    conf=params.rec_conf,
-                    iou=params.rec_iou,
-                )
-                flip_boxes = _extract_boxes(rec_pred_flip)
-                if not flip_boxes:
-                    flip_boxes = _extract_boxes_fallback(
-                        rec_pred_flip, max(1, roi_flip.shape[1]), max(1, roi_flip.shape[0])
-                    )
-                flip_boxes = _filter_rec_boxes(
-                    flip_boxes,
-                    params.sort_by,
+                    device,
+                    params,
+                    vocab_map,
+                    expected_len,
+                    min_score,
                     flip_min_score,
-                    per_top_n,
-                    params.rec_min_box,
-                    params.rec_row_thresh,
                 )
-                flip_text, flip_scores = _rec_text_from_boxes(flip_boxes, vocab_map)
-                if expected_len is not None and len(flip_text) > expected_len:
-                    flip_text = flip_text[:expected_len]
-                    flip_scores = flip_scores[:expected_len]
-                # ...existing code...
-
-            text = "".join(text_parts)
-            score = float(np.mean(scores)) if scores else 0.0
             out_boxes.append(
                 OcrBox(
                     float(x1),

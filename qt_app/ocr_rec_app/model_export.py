@@ -91,6 +91,7 @@ def export_to_onnx(
     out_dir: Path,
     out_name: str | None = None,
     nms: bool | None = None,
+    dynamic: bool = False,
 ) -> Path:
     from ultralytics import YOLO
 
@@ -100,7 +101,7 @@ def export_to_onnx(
         "format": "onnx",
         "imgsz": imgsz,
         "opset": 12,
-        "dynamic": False,
+        "dynamic": bool(dynamic),
         "simplify": True,
     }
     if nms is not None:
@@ -125,6 +126,113 @@ def export_to_onnx(
     return guess
 
 
+def _is_ctc_checkpoint(model_path: Path) -> bool:
+    """判断是否为本项目 train-rec-ctc 产出的 checkpoint。"""
+    try:
+        import torch
+
+        ckpt = torch.load(str(model_path), map_location="cpu", weights_only=False)
+    except Exception:
+        return False
+
+    if not isinstance(ckpt, dict):
+        return False
+    state = ckpt.get("state_dict")
+    if not isinstance(state, dict):
+        return False
+    return all(k in state for k in ("model", "rnn", "head")) and ("vocab" in ckpt)
+
+
+def _export_ctc_to_onnx(
+    model_path: Path,
+    imgsz: int,
+    out_dir: Path,
+    out_name: str | None = None,
+) -> Path:
+    """导出 CRNN+CTC checkpoint 到 ONNX（输出 logits: [B, C, T]）。"""
+    import torch
+    import torch.nn as nn
+
+    ckpt = torch.load(str(model_path), map_location="cpu", weights_only=False)
+    if not isinstance(ckpt, dict):
+        raise RuntimeError("CTC checkpoint 格式错误：不是 dict")
+    state = ckpt.get("state_dict")
+    vocab = ckpt.get("vocab")
+    if not isinstance(state, dict) or not isinstance(vocab, list):
+        raise RuntimeError("CTC checkpoint 缺少 state_dict/vocab")
+    if not all(k in state for k in ("model", "rnn", "head")):
+        raise RuntimeError("CTC checkpoint 缺少 model/rnn/head 权重")
+
+    model_h = int(ckpt.get("img_h", 48))
+    model_w = int(ckpt.get("img_w", 320))
+    export_h = max(16, model_h)
+    export_w = max(16, int(imgsz) if int(imgsz) > 0 else model_w)
+
+    class CtcExportModule(nn.Module):
+        def __init__(self, num_classes: int) -> None:
+            super().__init__()
+            self.model = nn.Sequential(
+                nn.Conv2d(3, 32, 3, 1, 1),
+                nn.BatchNorm2d(32),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(2, 2),
+                nn.Conv2d(32, 64, 3, 1, 1),
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(2, 2),
+                nn.Conv2d(64, 128, 3, 1, 1),
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+            )
+            self.rnn = nn.LSTM(
+                input_size=128 * 12,
+                hidden_size=256,
+                num_layers=2,
+                batch_first=False,
+                bidirectional=True,
+                dropout=0.1,
+            )
+            self.head = nn.Linear(512, num_classes + 1)
+
+        def forward(self, x):
+            feat = self.model(x)  # [B, 128, H/4, W/4]
+            b, c, h, w = feat.shape
+            seq = feat.permute(3, 0, 1, 2).contiguous().view(w, b, c * h)  # [T, B, C*H]
+            seq, _ = self.rnn(seq)
+            logits = self.head(seq)  # [T, B, C]
+            return logits.permute(1, 2, 0).contiguous()  # [B, C, T]
+
+    module = CtcExportModule(num_classes=len(vocab))
+    module.model.load_state_dict(state["model"])
+    module.rnn.load_state_dict(state["rnn"])
+    module.head.load_state_dict(state["head"])
+    module.eval()
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if out_name:
+        out_path = out_dir / out_name
+    else:
+        out_path = out_dir / (model_path.stem + ".onnx")
+
+    dummy = torch.randn(1, 3, export_h, export_w, dtype=torch.float32)
+    torch.onnx.export(
+        module,
+        dummy,
+        str(out_path),
+        input_names=["images"],
+        output_names=["logits"],
+        opset_version=12,
+        dynamic_axes={
+            "images": {0: "batch", 3: "width"},
+            "logits": {0: "batch", 2: "time"},
+        },
+    )
+
+    if not out_path.exists():
+        raise RuntimeError("CTC 导出 ONNX 失败，未生成文件")
+    return out_path
+
+
 def export_and_encrypt(
     model_path: Path,
     imgsz: int,
@@ -133,6 +241,7 @@ def export_and_encrypt(
     onnx_name: str | None = None,
     enc_name: str | None = None,
     nms: bool | None = None,
+    dynamic: bool = False,
 ) -> ExportResult:
     if not model_path.exists():
         raise FileNotFoundError(f"模型不存在: {model_path}")
@@ -147,7 +256,23 @@ def export_and_encrypt(
                 target.write_bytes(onnx_path.read_bytes())
             onnx_path = target
     else:
-        onnx_path = export_to_onnx(model_path, imgsz, out_dir, out_name=onnx_name, nms=nms)
+        # CTC checkpoint 不能走 Ultralytics YOLO 导出，否则会报 KeyError('model')。
+        if model_path.suffix.lower() == ".pt" and _is_ctc_checkpoint(model_path):
+            onnx_path = _export_ctc_to_onnx(
+                model_path,
+                imgsz,
+                out_dir,
+                out_name=onnx_name,
+            )
+        else:
+            onnx_path = export_to_onnx(
+                model_path,
+                imgsz,
+                out_dir,
+                out_name=onnx_name,
+                nms=nms,
+                dynamic=dynamic,
+            )
         if not onnx_path.exists():
             raise FileNotFoundError("导出 ONNX 失败，请检查模型与依赖")
 

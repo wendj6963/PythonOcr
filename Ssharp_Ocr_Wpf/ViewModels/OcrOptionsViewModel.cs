@@ -49,6 +49,10 @@ namespace Ssharp_Ocr_Wpf.ViewModels
         /// </summary>
         public int RecImgSize { get; set; } = 320;
         /// <summary>
+        /// 识别后端（YOLO/CTC）。
+        /// </summary>
+        public RecBackend RecBackend { get; set; } = RecBackend.Yolo;
+        /// <summary>
         /// 识别自动尺寸开关。
         /// </summary>
         public bool RecAutoImgSize { get; set; } = true;
@@ -182,6 +186,7 @@ namespace Ssharp_Ocr_Wpf.ViewModels
                 DetDistinctMinCenterRatio = DetDistinctMinCenterRatio,
                 DetOutputFormat = DetOutputFormat,
                 RecImgSize = RecImgSize,
+                RecBackend = RecBackend,
                 RecAutoImgSize = RecAutoImgSize,
                 RecImgSizeMin = RecImgSizeMin,
                 RecImgSizeMax = RecImgSizeMax,

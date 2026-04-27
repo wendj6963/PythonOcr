@@ -11,6 +11,8 @@ from .label_tool import SimpleLabeler, DualLabeler, AssistantLabeler
 from .label_check import check_obb_dataset
 from .pipeline import infer_ocr, save_json
 from .yolo_backend import TrainArgs, train
+from .rec_ctc_prep import prepare_rec_ctc_dataset
+from .rec_ctc_backend import CtcTrainArgs, CtcInferArgs, train_ctc, infer_ctc
 
 
 def _add_common_train_args(p: argparse.ArgumentParser) -> None:
@@ -129,6 +131,52 @@ def cmd_train_rec(args: argparse.Namespace) -> None:
         name=args.name,
     )
     train(ta)
+
+
+def cmd_prepare_rec_ctc(args: argparse.Namespace) -> None:
+    rep = prepare_rec_ctc_dataset(
+        det_root=norm_path(args.det_root),
+        rec_root=norm_path(args.rec_root),
+        out_root=norm_path(args.out),
+        vocab_path=norm_path(args.vocab),
+    )
+    print(f"CTC 数据集已生成: {args.out}")
+    print(f"images={rep.images}, roi_samples={rep.rois}, empty_skipped={rep.skipped_empty}")
+
+
+def cmd_train_rec_ctc(args: argparse.Namespace) -> None:
+    ta = CtcTrainArgs(
+        train_manifest=norm_path(args.train_manifest),
+        val_manifest=norm_path(args.val_manifest),
+        vocab=norm_path(args.vocab),
+        project=norm_path(args.project),
+        name=args.name,
+        epochs=int(args.epochs),
+        batch=int(args.batch),
+        lr=float(args.lr),
+        img_h=int(args.img_h),
+        img_w=int(args.img_w),
+        workers=int(args.workers),
+        device=str(args.device),
+    )
+    best = train_ctc(ta)
+    print(f"CTC 训练完成，best 权重: {best}")
+
+
+def cmd_infer_ctc(args: argparse.Namespace) -> None:
+    ia = CtcInferArgs(
+        weights=norm_path(args.weights),
+        image=norm_path(args.image),
+        img_h=int(args.img_h),
+        img_w=int(args.img_w),
+        device=str(args.device),
+    )
+    result = infer_ctc(ia)
+    if args.out:
+        save_json(result, norm_path(args.out))
+        print(f"结果已保存: {args.out}")
+    else:
+        print(result["text"])
 
 
 def cmd_infer(args: argparse.Namespace) -> None:
@@ -378,6 +426,37 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--data", required=True, help="rec.yaml 路径")
     _add_common_train_args(sp)
     sp.set_defaults(func=cmd_train_rec)
+
+    sp = sub.add_parser("prepare-rec-ctc", help="基于已标注 det/rec 自动生成 CTC 训练数据（无需重标）")
+    sp.add_argument("--det-root", required=True, help="det 数据根目录，例如 datasets/det")
+    sp.add_argument("--rec-root", required=True, help="rec 数据根目录，例如 datasets/rec")
+    sp.add_argument("--out", required=True, help="输出目录，例如 datasets/rec_ctc")
+    sp.add_argument("--vocab", required=True, help="vocab 文件，UTF-8 每行一个字符")
+    sp.set_defaults(func=cmd_prepare_rec_ctc)
+
+    sp = sub.add_parser("train-rec-ctc", help="训练 CRNN+CTC 识别模型")
+    sp.add_argument("--train-manifest", required=True, help="训练清单，例如 datasets/rec_ctc/manifest_train.txt")
+    sp.add_argument("--val-manifest", required=True, help="验证清单，例如 datasets/rec_ctc/manifest_val.txt")
+    sp.add_argument("--vocab", required=True, help="vocab 文件")
+    sp.add_argument("--project", type=str, default="models", help="输出目录")
+    sp.add_argument("--name", type=str, default="rec_ctc_exp", help="实验名称")
+    sp.add_argument("--epochs", type=int, default=80, help="训练轮数")
+    sp.add_argument("--batch", type=int, default=32, help="batch")
+    sp.add_argument("--lr", type=float, default=1e-3, help="学习率")
+    sp.add_argument("--img-h", type=int, default=48, help="输入高")
+    sp.add_argument("--img-w", type=int, default=320, help="输入宽")
+    sp.add_argument("--workers", type=int, default=0, help="DataLoader workers")
+    sp.add_argument("--device", type=str, default="cpu", help="cpu 或 0/cuda")
+    sp.set_defaults(func=cmd_train_rec_ctc)
+
+    sp = sub.add_parser("infer-ctc", help="单张图 CTC 推理")
+    sp.add_argument("--weights", required=True, help="CTC 权重 .pt")
+    sp.add_argument("--image", required=True, help="输入图片")
+    sp.add_argument("--img-h", type=int, default=0, help="输入高（0=跟随模型）")
+    sp.add_argument("--img-w", type=int, default=0, help="输入宽（0=跟随模型）")
+    sp.add_argument("--device", type=str, default="cpu", help="cpu 或 0/cuda")
+    sp.add_argument("--out", type=str, default="", help="可选：输出 json")
+    sp.set_defaults(func=cmd_infer_ctc)
 
     sp = sub.add_parser("infer", help="OCR 推理（定位→裁剪→识别）")
     sp.add_argument("--det-weights", required=True, help="定位权重 .pt")

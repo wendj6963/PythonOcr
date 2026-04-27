@@ -23,6 +23,11 @@
                 <x:Type TypeName="local:RecOutputMode" />
             </ObjectDataProvider.MethodParameters>
         </ObjectDataProvider>
+        <ObjectDataProvider x:Key="RecBackendValues" MethodName="GetValues" ObjectType="{x:Type sys:Enum}">
+            <ObjectDataProvider.MethodParameters>
+                <x:Type TypeName="local:RecBackend" />
+            </ObjectDataProvider.MethodParameters>
+        </ObjectDataProvider>
         <ObjectDataProvider x:Key="ChannelOrderValues" MethodName="GetValues" ObjectType="{x:Type sys:Enum}">
             <ObjectDataProvider.MethodParameters>
                 <x:Type TypeName="local:ImageChannelOrder" />
@@ -35,6 +40,43 @@
         <Style x:Key="InputStyle" TargetType="Control">
             <Setter Property="Margin" Value="0,4,0,4" />
             <Setter Property="Height" Value="26" />
+        </Style>
+        <Style x:Key="YoloOnlyControlStyle" TargetType="Control" BasedOn="{StaticResource InputStyle}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding SelectedItem, ElementName=RecBackendCombo}" Value="{x:Static local:RecBackend.Ctc}">
+                    <Setter Property="IsEnabled" Value="False" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="CtcOnlyControlStyle" TargetType="Control" BasedOn="{StaticResource InputStyle}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding SelectedItem, ElementName=RecBackendCombo}" Value="{x:Static local:RecBackend.Yolo}">
+                    <Setter Property="IsEnabled" Value="False" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="YoloOnlyLabelStyle" TargetType="TextBlock" BasedOn="{StaticResource LabelStyle}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding SelectedItem, ElementName=RecBackendCombo}" Value="{x:Static local:RecBackend.Ctc}">
+                    <Setter Property="Opacity" Value="0.45" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="CtcOnlyLabelStyle" TargetType="TextBlock" BasedOn="{StaticResource LabelStyle}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding SelectedItem, ElementName=RecBackendCombo}" Value="{x:Static local:RecBackend.Yolo}">
+                    <Setter Property="Opacity" Value="0.45" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="YoloOnlyCheckBoxStyle" TargetType="CheckBox">
+            <Setter Property="Margin" Value="0,4,0,4" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding SelectedItem, ElementName=RecBackendCombo}" Value="{x:Static local:RecBackend.Ctc}">
+                    <Setter Property="IsEnabled" Value="False" />
+                </DataTrigger>
+            </Style.Triggers>
         </Style>
     </Window.Resources>
     <Grid Margin="16">
@@ -50,16 +92,42 @@
         </Grid.RowDefinitions>
 
         <Border Grid.Column="0" Grid.Row="0" Padding="12" Background="#F5F6F8" CornerRadius="8">
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <Button Content="选择文件夹" Width="110" Margin="0,0,12,0" Command="{Binding BrowseFolderCommand}" />
-                <Button Content="上一张" Width="90" Margin="0,0,8,0" Command="{Binding PrevCommand}" />
-                <Button Content="下一张" Width="90" Margin="0,0,16,0" Command="{Binding NextCommand}" />
-                <TextBlock Text="当前进度：" VerticalAlignment="Center" Margin="0,0,6,0" />
-                <TextBlock Text="{Binding ProgressText}" VerticalAlignment="Center" FontWeight="Bold" />
-                <TextBlock Text="  " />
-                <TextBlock Text="文件：" VerticalAlignment="Center" />
-                <TextBlock Text="{Binding CurrentFileName}" VerticalAlignment="Center" FontWeight="Bold" />
-            </StackPanel>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="100" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="96" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="检测模型路径" Style="{StaticResource LabelStyle}" />
+                <TextBox Grid.Row="0" Grid.Column="1" Margin="0,4,8,4" Height="26" Text="{Binding DetModelPath, UpdateSourceTrigger=PropertyChanged}" />
+                <Button Grid.Row="0" Grid.Column="2" Content="选择文件" Height="26" Margin="0,4,0,4" Command="{Binding BrowseDetModelCommand}" />
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="识别模型路径" Style="{StaticResource LabelStyle}" />
+                <TextBox Grid.Row="1" Grid.Column="1" Margin="0,4,8,4" Height="26" Text="{Binding RecModelPath, UpdateSourceTrigger=PropertyChanged}" />
+                <Button Grid.Row="1" Grid.Column="2" Content="选择文件" Height="26" Margin="0,4,0,4" Command="{Binding BrowseRecModelCommand}" />
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="CTC模型路径" Style="{StaticResource LabelStyle}" />
+                <TextBox Grid.Row="2" Grid.Column="1" Margin="0,4,8,4" Height="26" Text="{Binding CtcModelPath, UpdateSourceTrigger=PropertyChanged}" />
+                <Button Grid.Row="2" Grid.Column="2" Content="选择文件" Height="26" Margin="0,4,0,4" Command="{Binding BrowseCtcModelCommand}" />
+
+                <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,6,0,0">
+                    <Button Content="选择文件夹" Width="110" Margin="0,0,12,0" Command="{Binding BrowseFolderCommand}" />
+                    <Button Content="上一张" Width="90" Margin="0,0,8,0" Command="{Binding PrevCommand}" />
+                    <Button Content="下一张" Width="90" Margin="0,0,16,0" Command="{Binding NextCommand}" />
+                    <TextBlock Text="当前进度：" VerticalAlignment="Center" Margin="0,0,6,0" />
+                    <TextBlock Text="{Binding ProgressText}" VerticalAlignment="Center" FontWeight="Bold" />
+                    <TextBlock Text="  " />
+                    <TextBlock Text="文件：" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding CurrentFileName}" VerticalAlignment="Center" FontWeight="Bold" />
+                </StackPanel>
+            </Grid>
         </Border>
 
         <Border Grid.Column="0" Grid.Row="1" Margin="0,12,12,12" Background="White" CornerRadius="8" BorderBrush="#D0D0D0" BorderThickness="1">
@@ -148,13 +216,10 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="120" />
                             <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="120" />
+                            <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
@@ -163,52 +228,43 @@
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="0" Text="检测模型路径" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding DetModelPath, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="0" Text="识别后端" Style="{StaticResource LabelStyle}" />
+                        <ComboBox x:Name="RecBackendCombo" Grid.Row="0" Grid.Column="1" ItemsSource="{Binding Source={StaticResource RecBackendValues}}" SelectedItem="{Binding Options.RecBackend}" Style="{StaticResource InputStyle}" />
 
-                        <TextBlock Grid.Row="1" Text="识别模型路径" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding RecModelPath, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="1" Text="模型密码" Style="{StaticResource LabelStyle}" />
+                        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Passphrase, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="GPU 加速" Style="{StaticResource LabelStyle}" />
+                        <CheckBox Grid.Row="1" Grid.Column="3" IsChecked="{Binding Options.UseGpu}" VerticalAlignment="Center" Margin="0,4,0,4" />
 
-                        <TextBlock Grid.Row="2" Text="模型密码" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Passphrase, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="2" Text="线程数" Style="{StaticResource LabelStyle}" />
+                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Options.NumThreads}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="2" Grid.Column="2" Text="排序方式" Style="{StaticResource LabelStyle}" />
+                        <ComboBox Grid.Row="2" Grid.Column="3" ItemsSource="{Binding Source={StaticResource SortModeValues}}" SelectedItem="{Binding Options.SortBy}" Style="{StaticResource InputStyle}" />
 
-                        <TextBlock Grid.Row="3" Text="GPU 加速" Style="{StaticResource LabelStyle}" />
-                        <CheckBox Grid.Row="3" Grid.Column="1" IsChecked="{Binding Options.UseGpu}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Row="3" Text="词表路径" Style="{StaticResource LabelStyle}" />
+                        <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding Options.VocabPath, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="3" Grid.Column="2" Text="期望长度" Style="{StaticResource LabelStyle}" />
+                        <TextBox Grid.Row="3" Grid.Column="3" Text="{Binding Options.RoiExpectedLengthsText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource InputStyle}" />
 
-                        <TextBlock Grid.Row="4" Text="线程数" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding Options.NumThreads}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="4" Text="ROI Padding 比例" Style="{StaticResource LabelStyle}" />
+                        <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding Options.RoiPadRatio}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="4" Grid.Column="2" Text="ROI Padding 像素" Style="{StaticResource LabelStyle}" />
+                        <TextBox Grid.Row="4" Grid.Column="3" Text="{Binding Options.RoiPadPx}" Style="{StaticResource InputStyle}" />
 
-                        <TextBlock Grid.Row="5" Text="ROI Padding 比例" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding Options.RoiPadRatio}" Style="{StaticResource InputStyle}" />
-
-                        <TextBlock Grid.Row="6" Text="ROI Padding 像素" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding Options.RoiPadPx}" Style="{StaticResource InputStyle}" />
-
-                        <TextBlock Grid.Row="7" Text="行分组阈值" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="7" Grid.Column="1" Text="{Binding Options.RecRowThresh}" Style="{StaticResource InputStyle}" />
-
-                        <TextBlock Grid.Row="8" Text="排序方式" Style="{StaticResource LabelStyle}" />
-                        <ComboBox Grid.Row="8" Grid.Column="1" ItemsSource="{Binding Source={StaticResource SortModeValues}}" SelectedItem="{Binding Options.SortBy}" Style="{StaticResource InputStyle}" />
-
-                        <TextBlock Grid.Row="9" Text="词表路径" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="9" Grid.Column="1" Text="{Binding Options.VocabPath, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource InputStyle}" />
-
-                        <TextBlock Grid.Row="10" Text="期望长度" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="10" Grid.Column="1" Text="{Binding Options.RoiExpectedLengthsText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="5" Text="行分组阈值" Style="{StaticResource YoloOnlyLabelStyle}" />
+                        <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding Options.RecRowThresh}" Style="{StaticResource YoloOnlyControlStyle}" />
                     </Grid>
                 </GroupBox>
 
                 <GroupBox Header="定位配置" Margin="0,0,0,12" Padding="10">
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="140" />
+                            <ColumnDefinition Width="120" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="120" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
@@ -218,50 +274,38 @@
 
                         <TextBlock Grid.Row="0" Text="输入尺寸" Style="{StaticResource LabelStyle}" />
                         <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding Options.DetImgSize}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="0" Grid.Column="2" Text="置信度阈值" Style="{StaticResource LabelStyle}" />
+                        <TextBox Grid.Row="0" Grid.Column="3" Text="{Binding Options.DetConf}" Style="{StaticResource InputStyle}" />
 
-                        <TextBlock Grid.Row="1" Text="置信度阈值" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Options.DetConf}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="1" Text="NMS 阈值" Style="{StaticResource LabelStyle}" />
+                        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Options.DetIou}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="最大检测数" Style="{StaticResource LabelStyle}" />
+                        <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding Options.DetMaxDet}" Style="{StaticResource InputStyle}" />
 
-                        <TextBlock Grid.Row="2" Text="NMS 阈值" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Options.DetIou}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="2" Text="原始最大检测数" Style="{StaticResource LabelStyle}" />
+                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Options.DetRawMaxDet}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="2" Grid.Column="2" Text="类别数" Style="{StaticResource LabelStyle}" />
+                        <TextBox Grid.Row="2" Grid.Column="3" Text="{Binding Options.DetClassCount}" Style="{StaticResource InputStyle}" />
 
-                        <TextBlock Grid.Row="3" Text="最大检测数" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding Options.DetMaxDet}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="3" Text="去重 IoU" Style="{StaticResource LabelStyle}" />
+                        <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding Options.DetDistinctIou}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="3" Grid.Column="2" Text="中心距离比例" Style="{StaticResource LabelStyle}" />
+                        <TextBox Grid.Row="3" Grid.Column="3" Text="{Binding Options.DetDistinctMinCenterRatio}" Style="{StaticResource InputStyle}" />
 
-                        <TextBlock Grid.Row="4" Text="原始最大检测数" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding Options.DetRawMaxDet}" Style="{StaticResource InputStyle}" />
-
-                        <TextBlock Grid.Row="5" Text="类别数" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding Options.DetClassCount}" Style="{StaticResource InputStyle}" />
-
-                        <TextBlock Grid.Row="6" Text="去重 IoU" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding Options.DetDistinctIou}" Style="{StaticResource InputStyle}" />
-
-                        <TextBlock Grid.Row="7" Text="中心距离比例" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="7" Grid.Column="1" Text="{Binding Options.DetDistinctMinCenterRatio}" Style="{StaticResource InputStyle}" />
-
-                        <TextBlock Grid.Row="8" Text="输出格式" Style="{StaticResource LabelStyle}" />
-                        <ComboBox Grid.Row="8" Grid.Column="1" ItemsSource="{Binding Source={StaticResource OutputFormatValues}}" SelectedItem="{Binding Options.DetOutputFormat}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="4" Text="输出格式" Style="{StaticResource LabelStyle}" />
+                        <ComboBox Grid.Row="4" Grid.Column="1" ItemsSource="{Binding Source={StaticResource OutputFormatValues}}" SelectedItem="{Binding Options.DetOutputFormat}" Style="{StaticResource InputStyle}" />
                     </Grid>
                 </GroupBox>
 
                 <GroupBox Header="识别配置" Padding="10">
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="140" />
+                            <ColumnDefinition Width="120" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="120" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
@@ -276,63 +320,53 @@
 
                         <TextBlock Grid.Row="0" Text="输入尺寸" Style="{StaticResource LabelStyle}" />
                         <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding Options.RecImgSize}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="0" Grid.Column="2" Text="自动尺寸" Style="{StaticResource LabelStyle}" />
+                        <CheckBox Grid.Row="0" Grid.Column="3" IsChecked="{Binding Options.RecAutoImgSize}" VerticalAlignment="Center" Margin="0,4,0,4" />
 
-                        <TextBlock Grid.Row="1" Text="自动尺寸" Style="{StaticResource LabelStyle}" />
-                        <CheckBox Grid.Row="1" Grid.Column="1" IsChecked="{Binding Options.RecAutoImgSize}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Row="1" Text="最小尺寸" Style="{StaticResource LabelStyle}" />
+                        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Options.RecImgSizeMin}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="最大尺寸" Style="{StaticResource LabelStyle}" />
+                        <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding Options.RecImgSizeMax}" Style="{StaticResource InputStyle}" />
 
-                        <TextBlock Grid.Row="2" Text="最小尺寸" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Options.RecImgSizeMin}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="2" Text="置信度阈值" Style="{StaticResource YoloOnlyLabelStyle}" />
+                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Options.RecConf}" Style="{StaticResource YoloOnlyControlStyle}" />
+                        <TextBlock Grid.Row="2" Grid.Column="2" Text="NMS 阈值" Style="{StaticResource YoloOnlyLabelStyle}" />
+                        <TextBox Grid.Row="2" Grid.Column="3" Text="{Binding Options.RecIou}" Style="{StaticResource YoloOnlyControlStyle}" />
 
-                        <TextBlock Grid.Row="3" Text="最大尺寸" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding Options.RecImgSizeMax}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="3" Text="TopN" Style="{StaticResource YoloOnlyLabelStyle}" />
+                        <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding Options.RecTopN}" Style="{StaticResource YoloOnlyControlStyle}" />
+                        <TextBlock Grid.Row="3" Grid.Column="2" Text="最小框" Style="{StaticResource YoloOnlyLabelStyle}" />
+                        <TextBox Grid.Row="3" Grid.Column="3" Text="{Binding Options.RecMinBox}" Style="{StaticResource YoloOnlyControlStyle}" />
 
-                        <TextBlock Grid.Row="4" Text="置信度阈值" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding Options.RecConf}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="4" Text="最小分数" Style="{StaticResource YoloOnlyLabelStyle}" />
+                        <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding Options.RecMinScore}" Style="{StaticResource YoloOnlyControlStyle}" />
+                        <TextBlock Grid.Row="4" Grid.Column="2" Text="翻转增强" Style="{StaticResource LabelStyle}" />
+                        <CheckBox Grid.Row="4" Grid.Column="3" IsChecked="{Binding Options.RecFlipEnable}" VerticalAlignment="Center" Margin="0,4,0,4" />
 
-                        <TextBlock Grid.Row="5" Text="NMS 阈值" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding Options.RecIou}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="5" Text="翻转最小分数" Style="{StaticResource LabelStyle}" />
+                        <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding Options.RecFlipMinScore}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="5" Grid.Column="2" Text="最大检测数" Style="{StaticResource YoloOnlyLabelStyle}" />
+                        <TextBox Grid.Row="5" Grid.Column="3" Text="{Binding Options.RecMaxDet}" Style="{StaticResource YoloOnlyControlStyle}" />
 
-                        <TextBlock Grid.Row="6" Text="TopN" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding Options.RecTopN}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="6" Text="类别数" Style="{StaticResource YoloOnlyLabelStyle}" />
+                        <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding Options.RecClassCount}" Style="{StaticResource YoloOnlyControlStyle}" />
+                        <TextBlock Grid.Row="6" Grid.Column="2" Text="输出格式" Style="{StaticResource YoloOnlyLabelStyle}" />
+                        <ComboBox Grid.Row="6" Grid.Column="3" ItemsSource="{Binding Source={StaticResource OutputFormatValues}}" SelectedItem="{Binding Options.RecOutputFormat}" Style="{StaticResource YoloOnlyControlStyle}" />
 
-                        <TextBlock Grid.Row="7" Text="最小框" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="7" Grid.Column="1" Text="{Binding Options.RecMinBox}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="7" Text="输出模式" Style="{StaticResource YoloOnlyLabelStyle}" />
+                        <ComboBox Grid.Row="7" Grid.Column="1" ItemsSource="{Binding Source={StaticResource RecModeValues}}" SelectedItem="{Binding Options.RecMode}" Style="{StaticResource YoloOnlyControlStyle}" />
+                        <TextBlock Grid.Row="7" Grid.Column="2" Text="CTC Blank" Style="{StaticResource CtcOnlyLabelStyle}" />
+                        <TextBox Grid.Row="7" Grid.Column="3" Text="{Binding Options.RecCtcBlankIndex}" Style="{StaticResource CtcOnlyControlStyle}" />
 
-                        <TextBlock Grid.Row="8" Text="最小分数" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="8" Grid.Column="1" Text="{Binding Options.RecMinScore}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="8" Text="CTC 类别数" Style="{StaticResource CtcOnlyLabelStyle}" />
+                        <TextBox Grid.Row="8" Grid.Column="1" Text="{Binding Options.RecCtcClassCount}" Style="{StaticResource CtcOnlyControlStyle}" />
+                        <TextBlock Grid.Row="8" Grid.Column="2" Text="使用 Obj" Style="{StaticResource YoloOnlyLabelStyle}" />
+                        <CheckBox Grid.Row="8" Grid.Column="3" IsChecked="{Binding Options.RecUseObjectness}" Style="{StaticResource YoloOnlyCheckBoxStyle}" />
 
-                        <TextBlock Grid.Row="9" Text="翻转增强" Style="{StaticResource LabelStyle}" />
-                        <CheckBox Grid.Row="9" Grid.Column="1" IsChecked="{Binding Options.RecFlipEnable}" VerticalAlignment="Center" />
-
-                        <TextBlock Grid.Row="10" Text="翻转最小分数" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="10" Grid.Column="1" Text="{Binding Options.RecFlipMinScore}" Style="{StaticResource InputStyle}" />
-
-                        <TextBlock Grid.Row="11" Text="最大检测数" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="11" Grid.Column="1" Text="{Binding Options.RecMaxDet}" Style="{StaticResource InputStyle}" />
-
-                        <TextBlock Grid.Row="12" Text="类别数" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="12" Grid.Column="1" Text="{Binding Options.RecClassCount}" Style="{StaticResource InputStyle}" />
-
-                        <TextBlock Grid.Row="13" Text="输出格式" Style="{StaticResource LabelStyle}" />
-                        <ComboBox Grid.Row="13" Grid.Column="1" ItemsSource="{Binding Source={StaticResource OutputFormatValues}}" SelectedItem="{Binding Options.RecOutputFormat}" Style="{StaticResource InputStyle}" />
-
-                        <TextBlock Grid.Row="14" Text="输出模式" Style="{StaticResource LabelStyle}" />
-                        <ComboBox Grid.Row="14" Grid.Column="1" ItemsSource="{Binding Source={StaticResource RecModeValues}}" SelectedItem="{Binding Options.RecMode}" Style="{StaticResource InputStyle}" />
-
-                        <TextBlock Grid.Row="15" Text="CTC Blank" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="15" Grid.Column="1" Text="{Binding Options.RecCtcBlankIndex}" Style="{StaticResource InputStyle}" />
-
-                        <TextBlock Grid.Row="16" Text="CTC 类别数" Style="{StaticResource LabelStyle}" />
-                        <TextBox Grid.Row="16" Grid.Column="1" Text="{Binding Options.RecCtcClassCount}" Style="{StaticResource InputStyle}" />
-
-                        <TextBlock Grid.Row="17" Text="使用 Obj" Style="{StaticResource LabelStyle}" />
-                        <CheckBox Grid.Row="17" Grid.Column="1" IsChecked="{Binding Options.RecUseObjectness}" VerticalAlignment="Center" />
-
-                        <TextBlock Grid.Row="18" Text="Sigmoid" Style="{StaticResource LabelStyle}" />
-                        <CheckBox Grid.Row="18" Grid.Column="1" IsChecked="{Binding Options.RecUseSigmoid}" VerticalAlignment="Center" />
-
-                        <TextBlock Grid.Row="19" Text="通道顺序" Style="{StaticResource LabelStyle}" />
-                        <ComboBox Grid.Row="19" Grid.Column="1" ItemsSource="{Binding Source={StaticResource ChannelOrderValues}}" SelectedItem="{Binding Options.RecChannelOrder}" Style="{StaticResource InputStyle}" />
+                        <TextBlock Grid.Row="9" Text="Sigmoid" Style="{StaticResource YoloOnlyLabelStyle}" />
+                        <CheckBox Grid.Row="9" Grid.Column="1" IsChecked="{Binding Options.RecUseSigmoid}" Style="{StaticResource YoloOnlyCheckBoxStyle}" />
+                        <TextBlock Grid.Row="9" Grid.Column="2" Text="通道顺序" Style="{StaticResource YoloOnlyLabelStyle}" />
+                        <ComboBox Grid.Row="9" Grid.Column="3" ItemsSource="{Binding Source={StaticResource ChannelOrderValues}}" SelectedItem="{Binding Options.RecChannelOrder}" Style="{StaticResource YoloOnlyControlStyle}" />
                     </Grid>
                 </GroupBox>
             </StackPanel>

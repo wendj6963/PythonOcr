@@ -4,6 +4,7 @@
     "image_dir": "",
     "det_model": "qt_app/models/det/default_det.onnx",
     "rec_model": "qt_app/models/rec/default_rec.onnx",
+    "ctc_model": "models/rec_ctc_exp/weights/best.pt",
     "vocab": "vocab_rec.txt"
   },
   "params": {
@@ -14,6 +15,7 @@
     "rec_iou": 0.7,
     "det_imgsz": 640,
     "rec_imgsz": 320,
+    "rec_backend": "yolo",
     "use_gpu": false,
     "num_threads": 0,
     "sort_by": "x",

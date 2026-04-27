@@ -25,6 +25,11 @@
 5) `tools/04_一键检查_补标后复查.bat`
 - 补标后快速复查：同步 labels_all -> labels，并检查 det/rec 标注完整性
 
+6) `tools/09_生成CTC数据并训练_rec_ctc.bat`（新增，可并行）
+- 基于现有 det/rec 标注自动生成 `datasets/rec_ctc`
+- 训练 `CRNN+CTC` 识别模型到 `models/rec_ctc_exp/weights`
+- 不影响已有 `yolo-rec` 流程，可做 A/B 对比
+
 > 手工命令行等价（确保已激活环境）：
 > ```powershell
 > pip install -e .
@@ -123,6 +128,14 @@ pyocr check-obb-labels --images datasets\det\images\train --labels datasets\det\
 pyocr train-det --data datasets\det\det.yaml --epochs 50 --imgsz 640 --batch 8  --device 0 --project models --name det_exp
 pyocr train-rec --data datasets\rec\rec.yaml --epochs 50 --imgsz 640 --batch 16 --device 0 --project models --name rec_exp
 pyocr infer --det-weights models\det_exp\weights\best.pt --rec-weights models\rec_exp\weights\best.pt --image Images\trains\1_7_131830248.bmp --vocab vocab_rec.txt
+```
+
+### 4.1 并行方案：CRNN+CTC（推荐用于提高跨端稳定性）
+
+```powershell
+pyocr prepare-rec-ctc --det-root datasets\det --rec-root datasets\rec --out datasets\rec_ctc --vocab vocab_rec.txt
+pyocr train-rec-ctc --train-manifest datasets\rec_ctc\manifest_train.txt --val-manifest datasets\rec_ctc\manifest_val.txt --vocab vocab_rec.txt --project models --name rec_ctc_exp --epochs 80 --batch 32 --img-h 48 --img-w 320 --device 0
+pyocr infer-ctc --weights models\rec_ctc_exp\weights\best.pt --image Images\trains\1_7_131830248.bmp --device 0
 ```
 
 ## 5. Qt 训练工具
